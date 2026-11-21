@@ -1,6 +1,6 @@
-# Leon for Zami
+# zami-plugin-leon
 
-A Slack workspace for [Zami](https://github.com/leonsilicon/Zami), built around Linear projects and the issues awaiting Leon.
+A Zami plugin that optimizes the UI for how Leon uses Slack.
 
 ## Install
 
