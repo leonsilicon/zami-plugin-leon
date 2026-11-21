@@ -6,16 +6,23 @@ export interface BridgeState {
 interface Room {
   roomId: string;
   name: string;
+  tags?: Record<string, unknown>;
   isSpaceRoom(): boolean;
 }
 
 export interface MatrixEvent {
   getType(): string;
+  getRoomId(): string | undefined;
 }
 
+type ObservedMatrixEvent = "RoomState.events" | "accountData" | "Room.timeline" | "Event.decrypted";
+
 export interface MatrixClient {
-  on(event: "RoomState.events", listener: (event: MatrixEvent) => void): void;
-  off(event: "RoomState.events", listener: (event: MatrixEvent) => void): void;
+  getUserId(): string | null;
+  on(event: ObservedMatrixEvent, listener: (event: MatrixEvent) => void): void;
+  on(event: "Room.tags", listener: () => void): void;
+  off(event: ObservedMatrixEvent, listener: (event: MatrixEvent) => void): void;
+  off(event: "Room.tags", listener: () => void): void;
 }
 
 interface Disposable {
@@ -31,6 +38,7 @@ export interface HostModules {
       showSpaceHome: boolean;
       draftDm: object | null;
       roomsTick: number;
+      unreadTick: number;
     };
     setActiveRoom(id: string): void;
     setActiveSpace(id: string | null): void;
@@ -47,9 +55,19 @@ export interface HostModules {
       syncState: string;
     };
   };
+  "$lib/stores/notifications.svelte": {
+    notificationsState: { tick: number };
+    hasLoudInRoom(roomId: string): boolean;
+  };
   "$lib/matrix/client": {
+    getRoom(roomId: string): Room | null;
     getRooms(): Room[];
     getRoomTopic(room: Room): string | null;
+    getRoomUnreadInfo(room: Room): { unread: boolean; highlight: number };
+    roomHasThreadUnread(room: Room): boolean;
+    getOwnAvatarUrl(): string | null;
+    getMemberAvatar(room: Room, userId: string): string | null;
+    mxcToHttp(mxc: string | null): string | null;
   };
   "$lib/i18n/index": {
     t(this: void, key: "common.openRoomList"): string;
@@ -59,10 +77,23 @@ export interface HostModules {
   };
 }
 
+type ClientModule = HostModules["$lib/matrix/client"];
+type AvatarFunction = "getOwnAvatarUrl" | "getMemberAvatar";
+
 export interface ZamiApi {
   import<Key extends keyof HostModules>(id: Key): Promise<HostModules[Key]>;
   app: { loadEarly(): void };
   styles: { add(css: string): Disposable };
+  patch: {
+    after<Key extends AvatarFunction>(
+      target: ClientModule,
+      method: Key,
+      hook: (
+        result: string | null,
+        args: Parameters<ClientModule[Key]>,
+      ) => string | null | undefined,
+    ): Disposable;
+  };
   runes: {
     watch<T>(read: () => T, onChange: (value: T) => void): Disposable;
   };
@@ -75,5 +106,9 @@ export interface ZamApi {
     set(key: string, value: unknown): void;
   };
   unsafe: { getClient(): MatrixClient | null | undefined };
-  matrix: { listState(roomId: string, type: string): BridgeState[] };
+  matrix: {
+    listState(roomId: string, type: string): BridgeState[];
+    getAccountData(type: string): Record<string, unknown> | null;
+    getRecentMessages(roomId: string): { body: string; timestamp: number }[];
+  };
 }

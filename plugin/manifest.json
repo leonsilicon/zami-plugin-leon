@@ -1,7 +1,7 @@
 {
   "id": "zami-plugin-leon",
   "name": "Leon",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Open today's Linear project chat in Zami and keep Awaiting Leon channels one tap away.",
   "author": "leonsilicon",
   "entry": "index.js",

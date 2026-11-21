@@ -15,6 +15,7 @@ export interface ProjectAppearance {
 interface IssueDetails {
   title: string;
   priority: number | null;
+  statusName: string;
   statusType: string;
   statusColor: string | null;
 }
@@ -25,12 +26,18 @@ export interface BridgedRoom {
   topic: string | null;
   bridges: BridgeState[];
   isSpace?: boolean;
+  archived?: boolean;
 }
 
 export const AWAITING = "Awaiting Leon";
-const TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
+export const PROJECT_VISIBILITY_CHANNEL = "zami-project-visibility";
+const PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
+const TASK = /^(leon-\d+)(?:-[a-z0-9_-]+)?$/;
 const TOPIC_SEPARATOR = " · ";
 const LINEAR_WORKFLOW = /^linear:v1 ([a-z_]+) (#[\da-f]{6}|-)(?: p([0-4]))?(?: |$)/i;
+const LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
+const SLACK_LINK = /^<([^|<>\s]+)(?:\|[^<>]+)?>$/;
+const CLOSED_STATUS_TYPES = new Set(["completed", "canceled", "duplicate"]);
 const PROJECT = /^project-[a-z0-9_-]+$/;
 const PROJECT_TOPIC_SUFFIX =
   /(?:^| · )\[linear-project:v1 (#[\da-f]{6}|-)(?: ([^[\]\r\n]{1,80}))?\]$/i;
@@ -55,15 +62,10 @@ export function projectDay(now = new Date()) {
 
 export function projectLabel(name: string) {
   const slug = name.slice("project-".length);
-  const [, datePart, suffix] =
-    /^(\d{4}-\d{2}-\d{2}|\d{8})(?:-([2-9]|[1-9][0-9]+))?$/.exec(slug) ?? [];
-  if (datePart) {
-    const iso = datePart.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
-    const date = new Date(`${iso}T00:00:00Z`);
-    if (!Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === iso) {
-      const label = PROJECT_DATE_LABEL.format(date);
-      return suffix ? `${label} (${suffix})` : label;
-    }
+  const dated = datedProject(name);
+  if (dated) {
+    const label = PROJECT_DATE_LABEL.format(dated.date);
+    return dated.suffix ? `${label} (${dated.suffix})` : label;
   }
 
   return (
@@ -74,6 +76,16 @@ export function projectLabel(name: string) {
   );
 }
 
+function datedProject(name: string) {
+  const [, datePart, suffix] =
+    /^project-(\d{4}-\d{2}-\d{2}|\d{8})(?:-([2-9]|[1-9][0-9]+))?$/.exec(name) ?? [];
+  if (!datePart) return null;
+  const iso = datePart.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
+  const date = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== iso) return null;
+  return { date, iso, suffix };
+}
+
 function channelName(name: string) {
   return typeof name === "string" ? name.trim().replace(/^#/, "").toLowerCase() : "";
 }
@@ -82,15 +94,14 @@ export function isSlackProtocol(id: unknown) {
   return typeof id === "string" && ["slack", "slackgo"].includes(id.toLowerCase());
 }
 
-function slackRoom(room: BridgedRoom) {
-  if (room.isSpace) return false;
-  return room.bridges.some(({ content }) => {
+function slackBridges(room: BridgedRoom) {
+  if (room.isSpace) return [];
+  return room.bridges.filter(({ content }) => {
     const info = content.protocol;
     const protocol = info && typeof info === "object" && "id" in info ? info.id : undefined;
     const roomType = content["com.beeper.room_type.v2"];
     return (
-      typeof protocol === "string" &&
-      ["slack", "slackgo"].includes(protocol.toLowerCase()) &&
+      isSlackProtocol(protocol) &&
       content["com.beeper.room_type"] !== "dm" &&
       roomType !== "dm" &&
       roomType !== "group_dm" &&
@@ -99,30 +110,56 @@ function slackRoom(room: BridgedRoom) {
   });
 }
 
-function awaitingIssue(name: string, topic: string | null): IssueDetails | null {
-  const match = TASK.exec(name);
-  if (!match || !topic) return null;
-  const [status, workflow, url, ...titleParts] = topic.split(TOPIC_SEPARATOR);
-  if (status?.trim() !== AWAITING) return null;
-
-  // Linear Sync puts the title last so it can contain the topic separator.
-  const style = workflow?.match(LINEAR_WORKFLOW);
-  const title = titleParts.join(TOPIC_SEPARATOR).trim();
-  if (style && url && title) {
-    return {
-      title,
-      priority: style[3] === undefined ? null : Number(style[3]),
-      statusType: style[1]!.toLowerCase(),
-      statusColor: style[2] === "-" ? null : style[2]!,
-    };
+function slackAddress(bridges: BridgeState[]) {
+  for (const { content } of bridges) {
+    const channel = content.channel;
+    const id = channel && typeof channel === "object" && "id" in channel && channel.id;
+    if (typeof id !== "string") continue;
+    const [, team, channelId] = /^(T[A-Z0-9]+)-([CG][A-Z0-9]+)$/.exec(id) ?? [];
+    if (team && channelId) return { team, channelId };
+    const network = content.network;
+    const networkId = network && typeof network === "object" && "id" in network && network.id;
+    if (typeof networkId === "string" && /^[CG][A-Z0-9]+$/.test(id)) {
+      return { team: networkId, channelId: id };
+    }
   }
+  return null;
+}
 
-  const slug = match[2]?.replace(/[-_]+/g, " ").trim();
+export function readProjectVisibility(
+  room: BridgedRoom,
+  readMessages: (id: string) => readonly { body: string; timestamp: number }[],
+) {
+  const address = slackAddress(slackBridges(room));
+  if (!address) return null;
+  for (const { body, timestamp } of [...readMessages(room.roomId)].reverse()) {
+    const [prefix, ...ids] = body.trim().split(" ");
+    if (prefix === PROJECT_VISIBILITY_PREFIX && ids.every((id) => /^[CG][A-Z0-9]+$/.test(id))) {
+      return { team: address.team, closed: new Set(ids), timestamp };
+    }
+  }
+  return null;
+}
+
+function linearIssue(name: string, topic: string | null): IssueDetails | null {
+  const identifier = TASK.exec(name)?.[1];
+  if (!identifier || !topic) return null;
+  const [status, workflow, link, ...titleParts] = topic.split(TOPIC_SEPARATOR);
+
+  // Archived Slack channels can keep their old, unversioned topic indefinitely.
+  // Linear Sync puts the title last so it can contain the topic separator.
+  const [, type, color, priority] = workflow?.match(LINEAR_WORKFLOW) ?? [];
+  const url = link?.match(SLACK_LINK)?.[1] ?? link;
+  const linkedIssue = url?.match(LINEAR_ISSUE)?.[1]?.toLowerCase();
+  const statusName = status?.trim();
+  const title = titleParts.join(TOPIC_SEPARATOR).trim();
+  if (!statusName || !type || !color || !title || linkedIssue !== identifier) return null;
   return {
-    title: slug ? slug.charAt(0).toUpperCase() + slug.slice(1) : match[1]!.toUpperCase(),
-    priority: null,
-    statusType: "started",
-    statusColor: null,
+    title,
+    priority: priority === undefined ? null : Number(priority),
+    statusName,
+    statusType: type.toLowerCase(),
+    statusColor: color === "-" ? null : color,
   };
 }
 
@@ -131,21 +168,42 @@ function projectAppearance(topic: string | null): ProjectAppearance {
   return { color: color === "-" ? null : (color ?? null), icon: icon ?? null };
 }
 
-export function workspace(rooms: BridgedRoom[], day: string) {
+export function workspace(
+  rooms: BridgedRoom[],
+  day: string,
+  visibility: ReadonlyMap<string, { closed: ReadonlySet<string> }> = new Map(),
+) {
   const channels = new Map<string, Channel>();
   const awaiting: Channel[] = [];
   const projects: Channel[] = [];
   for (const room of rooms) {
-    if (!slackRoom(room)) continue;
+    const bridges = slackBridges(room);
+    if (!bridges.length) continue;
     const name = channelName(room.name);
-    const issue = awaitingIssue(name, room.topic);
+    if (name === PROJECT_VISIBILITY_CHANNEL) continue;
+    const issue = linearIssue(name, room.topic);
     const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
     const channel = { id: room.roomId, name, ...(issue && { issue }), ...(project && { project }) };
     channels.set(channel.id, channel);
-    if (project) projects.push(channel);
-    if (issue) awaiting.push(channel);
+    if (project && !room.archived) {
+      const address = slackAddress(bridges);
+      const snapshot = address ? visibility.get(address.team) : undefined;
+      // Dailylinear closes past days. The snapshot can also show a manually reopened day.
+      const closed =
+        snapshot && address
+          ? snapshot.closed.has(address.channelId)
+          : (datedProject(name)?.iso ?? day) < day;
+      if (!closed) projects.push(channel);
+    }
+    if (issue?.statusName === AWAITING && !CLOSED_STATUS_TYPES.has(issue.statusType))
+      awaiting.push(channel);
   }
-  awaiting.sort((a, b) => a.name.localeCompare(b.name, "en", { numeric: true }));
+  // Linear's zero and missing priorities both sort after Low.
+  awaiting.sort(
+    (a, b) =>
+      (a.issue?.priority || 5) - (b.issue?.priority || 5) ||
+      a.name.localeCompare(b.name, "en", { numeric: true }),
+  );
   const canonical = `project-${day}`;
   const undashed = canonical.replace(day, day.replaceAll("-", ""));
   const suffixed = new RegExp(`^${canonical}-([2-9]|[1-9][0-9]+)$`);

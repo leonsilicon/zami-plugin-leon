@@ -1,9 +1,50 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { projectDay, projectLabel, workspace, type BridgedRoom } from "./src/workspace.ts";
+import { slackAccountAvatar } from "./src/slack-avatar.ts";
+import {
+  projectDay,
+  projectLabel,
+  readProjectVisibility,
+  workspace,
+  type BridgedRoom,
+} from "./src/workspace.ts";
 
 const day = "2026-11-21";
+
+void test("Home matches the Slack avatar to the room's bridge login", () => {
+  const avatar = (id: string) => ({ remote_profile: { avatar: `mxc://beeper.test/${id}` } });
+  const accountData = {
+    bridges: {
+      discordgo: { remoteState: { "TWORK-UONE": avatar("discord") } },
+      slackgo: {
+        remoteState: {
+          "TWORK-UONE": avatar("first"),
+          "TWORK-UTWO": avatar("second"),
+          "TOTHER-UONE": avatar("other"),
+        },
+      },
+    },
+  };
+  const bridge = (team: string, receiver?: string) => [
+    {
+      content: {
+        protocol: { id: "slackgo" },
+        "com.beeper.bridge_name": "slackgo",
+        channel: { "fi.mau.receiver": receiver },
+        network: { id: team },
+      },
+    },
+  ];
+  assert.equal(
+    slackAccountAvatar(accountData, bridge("TWORK", "TWORK-UTWO")),
+    "mxc://beeper.test/second",
+  );
+  assert.equal(slackAccountAvatar(accountData, bridge("TOTHER")), "mxc://beeper.test/other");
+  assert.equal(slackAccountAvatar(accountData, bridge("TWORK")), null);
+  assert.equal(slackAccountAvatar(accountData, bridge("TOTHER", "TOTHER-UMISSING")), null);
+  assert.equal(slackAccountAvatar(null, bridge("TWORK", "TWORK-UTWO")), null);
+});
 
 function room(
   name: string,
@@ -19,19 +60,25 @@ function room(
   };
 }
 
-void test("only Slack issue channels with the exact Linear status appear in Home", () => {
+void test("Home uses the synced Linear status and excludes stale or unrelated Slack topics", () => {
+  const topic = (number: number, status = "Awaiting Leon", type = "started") =>
+    `${status} · linear:v1 ${type} #f2c94c · https://linear.app/team/issue/LEON-${number} · Example issue`;
   const data = workspace(
     [
-      room("leon-12-review", "Awaiting Leon · https://linear.app/team/issue/LEON-12"),
-      room("#leon-2-invoice", "Awaiting Leon"),
-      room("leon-3-start", "Awaiting Start · due: Awaiting Leon"),
-      room("leon-4-clarify", "Awaiting Leon Again"),
+      room("leon-12-review", topic(12)),
+      room("#leon-2-invoice", topic(2)),
+      room("leon-3-start", topic(3, "Awaiting Start")),
+      room("leon-4-clarify", topic(4, "Awaiting Leon Again")),
       room("leon-5-no-topic", null),
-      room("leon-6-sms", "Awaiting Leon", "sms"),
-      room("leon-7-dm", "Awaiting Leon", "slack", { "com.beeper.room_type": "dm" }),
-      room("leon-lounge", "Awaiting Leon"),
-      room("general", "Awaiting Leon"),
-      room("project-demo", "Awaiting Leon"),
+      room("leon-6-sms", topic(6), "sms"),
+      room("leon-7-dm", topic(7), "slack", { "com.beeper.room_type": "dm" }),
+      room("leon-8-completed", topic(8, "Awaiting Leon", "completed")),
+      room("leon-9-canceled", "Awaiting Leon · https://linear.app/team/issue/LEON-9/canceled"),
+      room("leon-10-wrong-link", topic(90)),
+      room("leon-11-label-only", "Awaiting Leon"),
+      room("leon-lounge", topic(14)),
+      room("general", topic(15)),
+      room("project-demo", topic(16)),
     ],
     day,
   );
@@ -47,13 +94,12 @@ void test("only Slack issue channels with the exact Linear status appear in Home
   assert.equal(data.today, null);
   assert.equal(data.channels.has("!general"), true);
   assert.equal(data.channels.has("!leon-6-sms"), false);
+  assert.equal(data.channels.has("!leon-9-canceled"), true);
 });
 
-void test("issue rows read Linear priorities and keep titles from older topics", () => {
+void test("issue rows read the synced title, priority, and status appearance", () => {
   const data = workspace(
     [
-      room("leon-2-review-cafe", "Awaiting Leon · https://linear.app/team/issue/LEON-2"),
-      room("leon-3", "Awaiting Leon"),
       room(
         "leon-4-cancel-fongo",
         'Awaiting Leon · linear:v1 started #f2c94c p2 {"due":"2026-12-01"} · https://linear.app/team/issue/LEON-4 · Cancel Fongo Works · Montréal',
@@ -65,7 +111,7 @@ void test("issue rows read Linear priorities and keep titles from older topics",
       ),
       room(
         "leon-6-legacy",
-        "Awaiting Leon · linear:v1 started #f2c94c · https://linear.app/team/issue/LEON-6 · Previously synced title",
+        "Awaiting Leon · linear:v1 unstarted #f2c94c · <https://linear.app/team/issue/LEON-6/previously-synced-title> · Previously synced title",
       ),
       room(
         "leon-7-no-priority",
@@ -81,28 +127,61 @@ void test("issue rows read Linear priorities and keep titles from older topics",
   assert.deepEqual(
     data.awaiting.map(({ issue }) => issue),
     [
-      { title: "Review cafe", priority: null, statusType: "started", statusColor: null },
-      { title: "LEON-3", priority: null, statusType: "started", statusColor: null },
       {
         title: "Cancel Fongo Works · Montréal",
         priority: 2,
+        statusName: "Awaiting Leon",
         statusType: "started",
         statusColor: "#f2c94c",
       },
       {
         title: "Previously synced title",
         priority: null,
+        statusName: "Awaiting Leon",
+        statusType: "unstarted",
+        statusColor: "#f2c94c",
+      },
+      {
+        title: "No priority yet",
+        priority: 0,
+        statusName: "Awaiting Leon",
         statusType: "started",
         statusColor: "#f2c94c",
       },
-      { title: "No priority yet", priority: 0, statusType: "started", statusColor: "#f2c94c" },
       {
         title: "Malformed priority",
         priority: null,
+        statusName: "Awaiting Leon",
         statusType: "started",
         statusColor: "#f2c94c",
       },
     ],
+  );
+});
+
+void test("awaiting issues sort by Linear priority, then issue number", () => {
+  const issues = [
+    { number: 1, priority: " p4" },
+    { number: 2, priority: " p0" },
+    { number: 3, priority: " p3" },
+    { number: 21, priority: " p2" },
+    { number: 5, priority: "" },
+    { number: 6, priority: " p1" },
+    { number: 7, priority: " p2" },
+  ];
+  const { awaiting } = workspace(
+    issues.map(({ number, priority }) =>
+      room(
+        `leon-${number}-example`,
+        `Awaiting Leon · linear:v1 started -${priority} · https://linear.app/team/issue/LEON-${number} · Example issue`,
+      ),
+    ),
+    day,
+  );
+
+  assert.deepEqual(
+    awaiting.map(({ name }) => name),
+    [6, 7, 21, 3, 1, 2, 5].map((number) => `leon-${number}-example`),
   );
 });
 
@@ -118,6 +197,63 @@ void test("today's project handles channel naming collisions and early dailyline
   assert.equal(workspace(names.slice(0, -1), day).today?.name, "project-20261121");
   assert.equal(workspace(names.slice(0, -2), day).today?.name, "project-2026-11-21-2");
   assert.equal(workspace(names, "2026-11-22").today, null);
+});
+
+void test("the rail excludes Beeper archives and closed Slack projects for the matching workspace", () => {
+  const slack = (name: string, id: string, team = "TWORK") =>
+    room(name, null, "slackgo", { channel: { id: `${team}-${id}` } });
+  const statusRoom = slack("#zami-project-visibility", "GFEED");
+  const snapshot = readProjectVisibility(statusRoom, () => [
+    { body: "zami-projects:v1 COPEN", timestamp: 1 },
+    { body: "zami-projects:v1 CARCHIVED CDONE CTODAY", timestamp: 2 },
+    { body: "zami-projects:v1 invalid snapshot", timestamp: 3 },
+  ]);
+  assert.ok(snapshot);
+  assert.deepEqual([...snapshot.closed], ["CARCHIVED", "CDONE", "CTODAY"]);
+  const data = workspace(
+    [
+      statusRoom,
+      slack("project-2026-11-21", "CTODAY"),
+      slack("project-2026-11-21-2", "CTODAYSECOND"),
+      slack("project-archived", "CARCHIVED"),
+      slack("project-done", "CDONE"),
+      slack("project-same-channel-id", "CDONE", "TOTHER"),
+      slack("project-open", "COPEN"),
+      slack("project-2026-11-19", "CREOPENED"),
+      { ...slack("project-beeper-archive", "CBEEPER"), archived: true },
+    ],
+    day,
+    new Map([[snapshot.team, snapshot]]),
+  );
+  assert.equal(data.today?.name, "project-2026-11-21-2");
+  assert.deepEqual(
+    data.projects.map(({ name }) => name),
+    ["project-2026-11-21-2", "project-2026-11-19", "project-open", "project-same-channel-id"],
+  );
+  assert.equal(data.channels.has(statusRoom.roomId), false);
+  assert.equal(data.channels.has("!project-done"), true);
+  assert.deepEqual(
+    readProjectVisibility(statusRoom, () => [{ body: "zami-projects:v1", timestamp: 4 }])?.closed,
+    new Set(),
+  );
+});
+
+void test("past daily projects stay out of the rail while project visibility syncs", () => {
+  const data = workspace(
+    [
+      room("project-2026-11-20"),
+      room("project-20261119"),
+      room("project-2026-11-20-2"),
+      room("project-2026-11-21"),
+      room("project-2026-11-22"),
+      room("project-open"),
+    ],
+    day,
+  );
+  assert.deepEqual(
+    data.projects.map(({ name }) => name),
+    ["project-2026-11-21", "project-2026-11-22", "project-open"],
+  );
 });
 
 void test("the project date rolls over at midnight in Toronto in both seasons", () => {

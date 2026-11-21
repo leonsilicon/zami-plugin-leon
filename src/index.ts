@@ -1,8 +1,11 @@
 import { projectIcon } from "./project-icon.ts";
+import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
 import {
   AWAITING,
+  PROJECT_VISIBILITY_CHANNEL,
   projectDay,
   projectLabel,
+  readProjectVisibility,
   workspace,
   type BridgedRoom,
   type Channel,
@@ -16,6 +19,7 @@ interface WorkspaceModules {
   ui: HostModules["$lib/stores/interface.svelte"]["interfaceState"];
   auth: HostModules["$lib/stores/auth.svelte"]["auth"];
   clientModule: ClientModule;
+  notifications: HostModules["$lib/stores/notifications.svelte"];
   t: HostModules["$lib/i18n/index"]["t"];
   emojiForShortcode?: HostModules["$lib/data/emojiShortcodes"]["emojiForShortcode"];
 }
@@ -31,10 +35,14 @@ const PRIORITIES = [
   "Low priority",
 ];
 
+function readBridges(matrix: ZamApi["matrix"], roomId: string) {
+  return BRIDGE_EVENTS.flatMap((type) => matrix.listState(roomId, type));
+}
+
 function readRooms(matrix: ZamApi["matrix"], clientModule: ClientModule): BridgedRoom[] {
   return clientModule.getRooms().flatMap((room) => {
     if (room.isSpaceRoom()) return [];
-    const bridges = BRIDGE_EVENTS.flatMap((type) => matrix.listState(room.roomId, type));
+    const bridges = readBridges(matrix, room.roomId);
     if (!bridges.length) return [];
     return [
       {
@@ -42,6 +50,7 @@ function readRooms(matrix: ZamApi["matrix"], clientModule: ClientModule): Bridge
         name: room.name,
         topic: clientModule.getRoomTopic(room),
         bridges,
+        archived: Object.hasOwn(room.tags ?? {}, "m.lowpriority"),
       },
     ];
   });
@@ -231,15 +240,21 @@ function makeSwitcher(currentMode: () => Mode, setMode: (mode: Mode) => void) {
 function install(
   zam: ZamApi,
   zami: ZamiApi,
-  { rooms, ui, auth, clientModule, t, emojiForShortcode }: WorkspaceModules,
+  { rooms, ui, auth, clientModule, notifications, t, emojiForShortcode }: WorkspaceModules,
 ) {
   const root = document.documentElement;
   const state = rooms.roomsState;
   let mode: Mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
   let day = projectDay();
   let data = workspace([], day);
+  const projectVisibility = new Map<
+    string,
+    NonNullable<ReturnType<typeof readProjectVisibility>>
+  >();
+  const visibilityRooms = new Set<string>();
   let activeAccount: string | null = null;
   let client: MatrixClient | null | undefined;
+  let homeProfile: { userId: string; roomId: string | null; avatarUrl: string | null } | undefined;
   let followToday = true;
   let previousRoom: string | null = null;
   let selectedProject: string | null = null;
@@ -256,13 +271,28 @@ function install(
   let header: HTMLElement | null = null;
   let hiddenMenu: HTMLButtonElement | null = null;
   let mobile = ui.isMobile;
+  let lastRail: string | undefined;
   let lastLists: string | undefined;
+  let lastProjectHeading: string | undefined;
+
+  const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
+    if (homeProfile && homeProfile.userId === auth.userId) return homeProfile.avatarUrl;
+  });
+  const messageAvatar = zami.patch.after(clientModule, "getMemberAvatar", (_, [room, userId]) => {
+    if (
+      homeProfile?.roomId === room.roomId &&
+      homeProfile.userId === userId &&
+      userId === auth.userId
+    )
+      return homeProfile.avatarUrl;
+  });
 
   const rail = element("nav", "leon-rail");
   rail.setAttribute("aria-label", "Linear projects");
   const list = element("section", "leon-list");
   const placeholder = element("section", "leon-placeholder");
   const fallbackHeader = element("div", "leon-placeholder-header", "Today");
+  const projectHeading = element("h2", "leon-chat-project");
   const status = element("p", "leon-status");
   status.setAttribute("role", "status");
   placeholder.append(fallbackHeader, status);
@@ -348,68 +378,124 @@ function install(
     previousRoom = state.activeRoomId;
   }
 
-  function renderLists(project: Channel | undefined) {
-    const rows = project ? [project] : data.awaiting;
-    const signature = JSON.stringify([
-      project,
-      data.projects,
-      data.today?.id,
-      rows,
-      state.activeRoomId,
-    ]);
-    if (signature === lastLists) return;
-    lastLists = signature;
+  function projectTitle(channel: Channel) {
+    return channel.id === data.today?.id ? "Today" : projectLabel(channel.name);
+  }
 
-    const home = button("leon-project", "Home", openHome);
+  function renderRail(project: Channel | undefined) {
+    const signature = JSON.stringify([project?.id, data.projects, data.today?.id]);
+    if (signature === lastRail) return;
+    lastRail = signature;
+
+    const home = button("leon-project", "", openHome);
+    home.append(
+      projectIcon({ icon: "home", color: null }, emojiForShortcode),
+      element("span", "leon-project-name", "Home"),
+    );
     home.setAttribute("aria-pressed", String(!project));
-    const projectsLabel = element("div", "leon-rail-label", "Projects");
-    rail.replaceChildren(home, projectsLabel);
+    rail.replaceChildren(home);
     for (const entry of data.projects) {
-      const label = entry.id === data.today?.id ? "Today" : projectLabel(entry.name);
-      const item = button("leon-project leon-project-row", "", () => choose(entry, true));
+      const item = button("leon-project", "", () => choose(entry, true));
       item.append(
         projectIcon(entry.project, emojiForShortcode),
-        element("span", "leon-project-name", label),
+        element("span", "leon-project-name", projectTitle(entry)),
       );
       item.title = `#${entry.name}`;
       item.setAttribute("aria-pressed", String(project?.id === entry.id));
       rail.append(item);
     }
+  }
+
+  function channelButton(row: Channel, isProject: boolean) {
+    const item = button("leon-channel", "", () => choose(row, isProject));
+    if (row.issue) {
+      const { title, priority, statusName, statusType, statusColor } = row.issue;
+      const priorityLabel = PRIORITIES[priority ?? -1] ?? "Priority unavailable";
+      item.classList.add("leon-issue");
+      item.title = title;
+      item.setAttribute("aria-label", `${title}, ${priorityLabel}, ${statusName}`);
+      const priorityIcon = element("span", "leon-issue-priority", priority === 1 ? "!" : undefined);
+      priorityIcon.dataset.priority = priority === null ? "unknown" : String(priority);
+      priorityIcon.setAttribute("aria-hidden", "true");
+      if (priority !== 1)
+        priorityIcon.append(element("span", ""), element("span", ""), element("span", ""));
+      const circle = element("span", "leon-issue-status");
+      circle.dataset.status = statusType;
+      circle.setAttribute("aria-hidden", "true");
+      if (statusColor) circle.style.color = statusColor;
+      item.append(priorityIcon, circle, element("span", "leon-issue-title", title));
+    } else {
+      item.textContent = `#${row.name}`;
+    }
+    if (state.activeRoomId === row.id) item.setAttribute("aria-current", "true");
+    return item;
+  }
+
+  function isUnread(roomId: string) {
+    const room = clientModule.getRoom(roomId);
+    if (!room) return false;
+    const { unread, highlight } = clientModule.getRoomUnreadInfo(room);
+    return (
+      unread ||
+      highlight > 0 ||
+      notifications.hasLoudInRoom(roomId) ||
+      clientModule.roomHasThreadUnread(room)
+    );
+  }
+
+  function renderLists(project: Channel | undefined) {
+    const unread: Channel[] = [];
+    const read: Channel[] = [];
+    if (!project) {
+      for (const row of data.awaiting) {
+        const group = isUnread(row.id) ? unread : read;
+        group.push(row);
+      }
+    }
+    const signature = JSON.stringify([project, unread, read, state.activeRoomId]);
+    if (signature === lastLists) return;
+    lastLists = signature;
 
     const title = element("h2", "leon-list-title", project ? "Project channel" : AWAITING);
     const scroll = element("div", "leon-list-scroll");
-    for (const row of rows) {
-      const item = button("leon-channel", "", () => choose(row, Boolean(project)));
-      if (row.issue) {
-        const { title, priority, statusType, statusColor } = row.issue;
-        const priorityLabel = PRIORITIES[priority ?? -1] ?? "Priority unavailable";
-        item.classList.add("leon-issue");
-        item.title = title;
-        item.setAttribute("aria-label", `${title}, ${priorityLabel}, ${AWAITING}`);
-        const priorityIcon = element(
-          "span",
-          "leon-issue-priority",
-          priority === 1 ? "!" : undefined,
-        );
-        priorityIcon.dataset.priority = priority === null ? "unknown" : String(priority);
-        priorityIcon.setAttribute("aria-hidden", "true");
-        if (priority !== 1)
-          priorityIcon.append(element("span", ""), element("span", ""), element("span", ""));
-        const circle = element("span", "leon-issue-status");
-        circle.dataset.status = statusType;
-        circle.setAttribute("aria-hidden", "true");
-        if (statusColor) circle.style.color = statusColor;
-        item.append(priorityIcon, circle, element("span", "leon-issue-title", title));
-      } else {
-        item.textContent = `#${row.name}`;
+    if (project) {
+      scroll.append(channelButton(project, true));
+    } else {
+      for (const [label, rows] of [
+        ["Unread", unread],
+        ["Read", read],
+      ] as const) {
+        const group = element("section", "leon-list-group");
+        group.setAttribute("aria-label", label);
+        group.append(element("h3", "leon-list-group-title", label));
+        for (const row of rows) group.append(channelButton(row, false));
+        if (!rows.length)
+          group.append(element("p", "leon-empty", `No ${label.toLowerCase()} issues`));
+        scroll.append(group);
       }
-      if (state.activeRoomId === row.id) item.setAttribute("aria-current", "true");
-      scroll.append(item);
     }
-    if (!rows.length) scroll.append(element("p", "leon-empty", "No channels awaiting you"));
     const scrollTop = list.lastElementChild?.scrollTop ?? 0;
     list.replaceChildren(title, scroll);
     scroll.scrollTop = scrollTop;
+  }
+
+  function renderProjectHeader(chat: Channel | undefined) {
+    if (!header || !chat?.project) {
+      projectHeading.remove();
+      return;
+    }
+
+    const title = projectTitle(chat);
+    const signature = JSON.stringify([title, chat.project]);
+    if (signature !== lastProjectHeading) {
+      lastProjectHeading = signature;
+      projectHeading.title = title;
+      projectHeading.replaceChildren(
+        projectIcon(chat.project, emojiForShortcode),
+        element("span", "leon-chat-project-title", title),
+      );
+    }
+    if (projectHeading.previousElementSibling !== menu) menu.after(projectHeading);
   }
 
   function bindApp() {
@@ -429,8 +515,21 @@ function install(
   }
 
   function render() {
+    const custom = mode === "leon";
+    const activeRoomId = state.activeRoomId;
+    const chat =
+      custom &&
+      activeRoomId !== null &&
+      !state.showInbox &&
+      !state.draftDm &&
+      (!followToday || data.today?.id === activeRoomId)
+        ? data.channels.get(activeRoomId)
+        : undefined;
+    updateHomeProfile(custom && selectedProject === null ? auth.userId : null, chat?.id ?? null);
+
     bindApp();
     if (!app || !main || !nativeRail || !nativeList) {
+      projectHeading.remove();
       switcher.attach(null);
       return;
     }
@@ -443,16 +542,7 @@ function install(
           `button[title="${escapedLabel}"], button[aria-label="${escapedLabel}"]:not(.leon-menu)`,
         )
       : null;
-    const custom = mode === "leon";
-    const hasChat =
-      custom &&
-      Boolean(
-        state.activeRoomId !== null &&
-        data.channels.has(state.activeRoomId) &&
-        !state.showInbox &&
-        !state.draftDm &&
-        (!followToday || data.today?.id === state.activeRoomId),
-      );
+    const hasChat = Boolean(chat);
     app.toggleAttribute("data-leon-ready", hasChat);
     app.toggleAttribute("data-leon-collapsed", custom && !mobile && collapsed);
 
@@ -466,6 +556,7 @@ function install(
       if (rail.nextElementSibling !== nativeRail) nativeRail.before(rail);
       if (list.nextElementSibling !== nativeList) nativeList.before(list);
       const project = data.projects.find(({ id }) => id === selectedProject);
+      renderRail(project);
       renderLists(project);
       if (!hasChat) {
         if (placeholder.parentNode !== main) main.append(placeholder);
@@ -502,10 +593,53 @@ function install(
         switcher.attach(menu);
       }
     }
+    renderProjectHeader(chat);
+  }
+
+  function updateHomeProfile(userId: string | null, roomId: string | null) {
+    if (!userId) {
+      if (homeProfile) {
+        homeProfile = undefined;
+        state.roomsTick++;
+      }
+      return;
+    }
+    const bridgeRoomId = roomId ?? data.today?.id;
+    const avatarUrl =
+      client?.getUserId() === userId
+        ? clientModule.mxcToHttp(
+            slackAccountAvatar(
+              zam.matrix.getAccountData(BRIDGE_ACCOUNT_DATA),
+              bridgeRoomId ? readBridges(zam.matrix, bridgeRoomId) : [],
+            ),
+          )
+        : null;
+    if (
+      homeProfile?.userId === userId &&
+      homeProfile.roomId === roomId &&
+      homeProfile.avatarUrl === avatarUrl
+    )
+      return;
+    homeProfile = { userId, roomId, avatarUrl };
+    // The host's account footer and message rows re-read their avatars on this tick.
+    state.roomsTick++;
+  }
+
+  function onAccountData(event: MatrixEvent) {
+    if (event.getType() === BRIDGE_ACCOUNT_DATA) schedule();
   }
 
   function onState(event: MatrixEvent) {
     if (ROOM_METADATA.has(event.getType())) schedule(true);
+  }
+
+  function onTags() {
+    schedule(true);
+  }
+
+  function onProjectVisibility(event: MatrixEvent) {
+    const id = event.getRoomId();
+    if (id && visibilityRooms.has(id)) schedule(true);
   }
 
   function update() {
@@ -514,19 +648,45 @@ function install(
     const currentClient = zam.unsafe.getClient();
     if (currentClient !== client) {
       client?.off("RoomState.events", onState);
+      client?.off("Room.tags", onTags);
+      client?.off("Room.timeline", onProjectVisibility);
+      client?.off("Event.decrypted", onProjectVisibility);
+      client?.off("accountData", onAccountData);
       client = currentClient;
       client?.on("RoomState.events", onState);
+      client?.on("Room.tags", onTags);
+      client?.on("Room.timeline", onProjectVisibility);
+      client?.on("Event.decrypted", onProjectVisibility);
+      client?.on("accountData", onAccountData);
       refresh = true;
     }
     if (auth.userId !== activeAccount) {
       activeAccount = auth.userId;
       data = workspace([], day);
+      projectVisibility.clear();
+      visibilityRooms.clear();
       resetLanding();
       refresh = true;
     }
     if (mode === "leon") {
       if (refresh) {
-        data = workspace(activeAccount ? readRooms(zam.matrix, clientModule) : [], day);
+        const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
+        visibilityRooms.clear();
+        for (const room of bridgedRooms) {
+          if (room.name.trim().replace(/^#/, "").toLowerCase() !== PROJECT_VISIBILITY_CHANNEL)
+            continue;
+          visibilityRooms.add(room.roomId);
+          const snapshot = readProjectVisibility(room, (id) => zam.matrix.getRecentMessages(id));
+          if (
+            snapshot &&
+            snapshot.timestamp >= (projectVisibility.get(snapshot.team)?.timestamp ?? 0)
+          )
+            projectVisibility.set(snapshot.team, snapshot);
+        }
+        data = workspace(bridgedRooms, day, projectVisibility);
+        if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) {
+          selectedProject = null;
+        }
         refresh = false;
       }
       updateNavigation();
@@ -554,13 +714,15 @@ function install(
     () => [auth.userId, auth.syncState, state.roomsTick],
     () => schedule(true),
   );
-  const navigationWatch = zami.runes.watch(
+  const viewWatch = zami.runes.watch(
     () => [
       state.activeRoomId,
       state.activeSpaceId,
       state.showInbox,
       state.showSpaceHome,
       state.draftDm,
+      state.unreadTick,
+      notifications.notificationsState.tick,
       ui.isMobile,
     ],
     () => schedule(),
@@ -573,6 +735,9 @@ function install(
       !nativeRail?.isConnected ||
       !nativeList?.isConnected ||
       (header && !header.isConnected) ||
+      (!header &&
+        app.hasAttribute("data-leon-ready") &&
+        main?.querySelector(REGION("room-header"))) ||
       mobile !== ui.isMobile
     )
       schedule();
@@ -588,13 +753,21 @@ function install(
     clearInterval(timer);
     document.removeEventListener("visibilitychange", checkDay);
     client?.off("RoomState.events", onState);
+    client?.off("Room.tags", onTags);
+    client?.off("Room.timeline", onProjectVisibility);
+    client?.off("Event.decrypted", onProjectVisibility);
+    client?.off("accountData", onAccountData);
     roomWatch.dispose();
-    navigationWatch.dispose();
+    viewWatch.dispose();
+    accountAvatar.dispose();
+    messageAvatar.dispose();
+    if (homeProfile) state.roomsTick++;
     switcher.dispose();
     rail.remove();
     list.remove();
     placeholder.remove();
     menu.remove();
+    projectHeading.remove();
     hiddenMenu?.removeAttribute("data-leon-hidden");
     delete root.dataset.leonView;
     app?.removeAttribute("data-leon-ready");
@@ -609,21 +782,22 @@ export default {
   async onload(zam: ZamApi) {
     const zami = zam.zami;
     if (!zami) throw new Error("Leon requires the Zami plugin API.");
-    const [rooms, { interfaceState: ui }, { auth }, clientModule, { t }, emoji] = await Promise.all(
-      [
+    const [rooms, { interfaceState: ui }, { auth }, clientModule, notifications, { t }, emoji] =
+      await Promise.all([
         zami.import("$lib/stores/rooms.svelte"),
         zami.import("$lib/stores/interface.svelte"),
         zami.import("$lib/stores/auth.svelte"),
         zami.import("$lib/matrix/client"),
+        zami.import("$lib/stores/notifications.svelte"),
         zami.import("$lib/i18n/index"),
         zami.import("$lib/data/emojiShortcodes").catch(() => undefined),
-      ],
-    );
+      ]);
     dispose = install(zam, zami, {
       rooms,
       ui,
       auth,
       clientModule,
+      notifications,
       t,
       emojiForShortcode: emoji?.emojiForShortcode,
     });
@@ -656,15 +830,10 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
   background: var(--zam-bg-tertiary);
   scrollbar-width: thin;
 }
-.leon-rail-label {
-  padding-top: 10px;
-  color: var(--zam-text-muted);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: .035em;
-  text-align: center;
-}
 .leon-project {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: none;
   min-height: 42px;
   padding: 7px 8px;
@@ -673,19 +842,13 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
   font-size: 12px;
   font-weight: 700;
   line-height: 1.25;
-  text-align: center;
+  text-align: start;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 .leon-project[aria-pressed="true"] {
   background: var(--zam-accent-fill);
   color: white;
-}
-.leon-project-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  text-align: start;
 }
 .leon-project-icon {
   flex: none;
@@ -695,8 +858,38 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
   line-height: 16px;
   color: var(--zam-text-muted);
 }
+.leon-project[aria-pressed="true"] .leon-project-icon {
+  color: inherit;
+}
 .leon-project-name {
   min-width: 0;
+}
+[data-zam-region="room-header"]:has(> .leon-chat-project) > :is(
+  h2:not(.leon-chat-project),
+  :is(span, svg):has(+ h2:not(.leon-chat-project)),
+  span:has(> .lucide-lock),
+  button:has(> :is(.lucide-phone, .lucide-maximize-2))
+) {
+  display: none !important;
+}
+.leon-chat-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--zam-text-primary);
+  font-weight: 650;
+}
+.leon-chat-project .leon-project-icon {
+  inline-size: 20px;
+  block-size: 20px;
+  font-size: 18px;
+  line-height: 20px;
+}
+.leon-chat-project-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .leon-list {
   min-width: 0;
@@ -718,6 +911,17 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
 .leon-list-scroll {
   overflow-y: auto;
   padding: 8px;
+}
+.leon-list-group + .leon-list-group {
+  margin-top: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--zam-divider);
+}
+.leon-list-group-title {
+  padding: 6px 8px;
+  color: var(--zam-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
 }
 .leon-channel {
   display: block;
