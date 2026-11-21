@@ -1,0 +1,8 @@
+{
+  "name": "zami-plugin-leon",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
