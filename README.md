@@ -23,4 +23,13 @@ The server rail uses `#project-…` Slack channels as Linear projects. Dailyline
 
 ## Develop
 
-Run `npm test` with Node.js. The installable ES module is `plugin/index.js` and has no build step. Use **Settings → Plugins → Load a plugin from a folder** to try local edits.
+With Node.js 24 or later and [Vite+](https://viteplus.dev/guide/) installed, run:
+
+```sh
+vp install
+vp check
+vp build
+npm test
+```
+
+Edit the TypeScript under `src/`. The Vite+ build produces `plugin/index.js`, the standalone ES module Zami fetches from GitHub. Commit the rebuilt bundle with source changes. To try a build locally, choose **Settings → Plugins → Load a plugin from a folder** and select `plugin/`.

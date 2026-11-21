@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { projectDay, workspace } from "./plugin/index.js";
+import { projectDay, workspace, type BridgedRoom } from "./src/workspace.ts";
 
 const day = "2026-11-21";
-function room(name, topic, protocol = "slack", extra = {}) {
+function room(
+  name: string,
+  topic: string | null = null,
+  protocol = "slack",
+  extra: Record<string, unknown> = {},
+): BridgedRoom {
   return {
     roomId: "!" + name,
     name,
@@ -12,7 +18,7 @@ function room(name, topic, protocol = "slack", extra = {}) {
   };
 }
 
-test("only Slack issue channels with the exact Linear status appear in Home", () => {
+void test("only Slack issue channels with the exact Linear status appear in Home", () => {
   const data = workspace(
     [
       room("leon-12-review", "Awaiting Leon · https://linear.app/team/issue/LEON-12"),
@@ -41,7 +47,7 @@ test("only Slack issue channels with the exact Linear status appear in Home", ()
   assert.equal(data.channels.has("!leon-6-sms"), false);
 });
 
-test("today's project handles channel naming collisions and early dailylinear names", () => {
+void test("today's project handles channel naming collisions and early dailylinear names", () => {
   const names = [
     room("project-2026-11-20"),
     room("project-2026-11-21-10"),
@@ -55,19 +61,27 @@ test("today's project handles channel naming collisions and early dailylinear na
   assert.equal(workspace(names, "2026-11-22").today, null);
 });
 
-test("the project date rolls over at midnight in Toronto in both seasons", () => {
+void test("the project date rolls over at midnight in Toronto in both seasons", () => {
   assert.equal(projectDay(new Date("2026-11-22T04:59:59Z")), "2026-11-21");
   assert.equal(projectDay(new Date("2026-11-22T05:00:00Z")), "2026-11-22");
   assert.equal(projectDay(new Date("2026-07-02T03:59:59Z")), "2026-07-01");
   assert.equal(projectDay(new Date("2026-07-02T04:00:00Z")), "2026-07-02");
 });
 
-test("the public repo index and installable manifest match", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const index = JSON.parse(await readFile(new URL("./index.json", import.meta.url)));
+void test("the repo index points to a self-contained Zami plugin bundle", async () => {
+  const index: { schema: number; plugins: ({ path: string } & Record<string, unknown>)[] } =
+    JSON.parse(await readFile(new URL("./index.json", import.meta.url), "utf8"));
   assert.equal(index.schema, 1);
-  const [{ path, ...listing }] = index.plugins;
-  const manifest = JSON.parse(await readFile(new URL(`./${path}/manifest.json`, import.meta.url)));
+  const [entry] = index.plugins;
+  assert.ok(entry);
+  const { path, ...listing } = entry;
+  const manifest: { entry: string } & Record<string, unknown> = JSON.parse(
+    await readFile(new URL(`./${path}/manifest.json`, import.meta.url), "utf8"),
+  );
   for (const [key, value] of Object.entries(listing)) assert.equal(manifest[key], value);
-  assert.equal(typeof (await import(`./${path}/${manifest.entry}`)).default.onload, "function");
+  // Zami imports the bundle from a blob URL. A data URL provides the same
+  // standalone ESM check in Node, including rejection of relative imports.
+  const code = await readFile(new URL(`./${path}/${manifest.entry}`, import.meta.url));
+  const bundle = await import(`data:text/javascript;base64,${code.toString("base64")}`);
+  assert.equal(typeof bundle.default?.onload, "function");
 });

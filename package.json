@@ -3,6 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vp build",
     "test": "node --test"
-  }
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "vite-plus": "1.5.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "bun@1.4.4"
 }
