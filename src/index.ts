@@ -1,4 +1,12 @@
-import { AWAITING, projectDay, workspace, type BridgedRoom, type Channel } from "./workspace.ts";
+import { projectIcon } from "./project-icon.ts";
+import {
+  AWAITING,
+  projectDay,
+  projectLabel,
+  workspace,
+  type BridgedRoom,
+  type Channel,
+} from "./workspace.ts";
 import type { HostModules, MatrixClient, MatrixEvent, ZamApi, ZamiApi } from "./zami.ts";
 
 type Mode = "leon" | "zami";
@@ -9,11 +17,19 @@ interface WorkspaceModules {
   auth: HostModules["$lib/stores/auth.svelte"]["auth"];
   clientModule: ClientModule;
   t: HostModules["$lib/i18n/index"]["t"];
+  emojiForShortcode?: HostModules["$lib/data/emojiShortcodes"]["emojiForShortcode"];
 }
 
 const BRIDGE_EVENTS = ["m.bridge", "uk.half-shot.bridge"];
 const ROOM_METADATA = new Set([...BRIDGE_EVENTS, "m.room.name", "m.room.topic"]);
 const REGION = (name: string) => `[data-zam-region="${name}"]`;
+const PRIORITIES = [
+  "No priority",
+  "Urgent priority",
+  "High priority",
+  "Medium priority",
+  "Low priority",
+];
 
 function readRooms(matrix: ZamApi["matrix"], clientModule: ClientModule): BridgedRoom[] {
   return clientModule.getRooms().flatMap((room) => {
@@ -215,7 +231,7 @@ function makeSwitcher(currentMode: () => Mode, setMode: (mode: Mode) => void) {
 function install(
   zam: ZamApi,
   zami: ZamiApi,
-  { rooms, ui, auth, clientModule, t }: WorkspaceModules,
+  { rooms, ui, auth, clientModule, t, emojiForShortcode }: WorkspaceModules,
 ) {
   const root = document.documentElement;
   const state = rooms.roomsState;
@@ -349,21 +365,13 @@ function install(
     const projectsLabel = element("div", "leon-rail-label", "Projects");
     rail.replaceChildren(home, projectsLabel);
     for (const entry of data.projects) {
-      const label = entry.name.slice("project-".length);
-      const initials =
-        entry.id === data.today?.id
-          ? "Today"
-          : /^\d{4}-\d{2}-\d{2}$/.test(label)
-            ? label.slice(5)
-            : label
-                .split("-")
-                .slice(0, 2)
-                .map((word) => word[0])
-                .join("")
-                .toUpperCase();
-      const item = button("leon-project", initials, () => choose(entry, true));
+      const label = entry.id === data.today?.id ? "Today" : projectLabel(entry.name);
+      const item = button("leon-project leon-project-row", "", () => choose(entry, true));
+      item.append(
+        projectIcon(entry.project, emojiForShortcode),
+        element("span", "leon-project-name", label),
+      );
       item.title = `#${entry.name}`;
-      item.setAttribute("aria-label", item.title);
       item.setAttribute("aria-pressed", String(project?.id === entry.id));
       rail.append(item);
     }
@@ -371,7 +379,30 @@ function install(
     const title = element("h2", "leon-list-title", project ? "Project channel" : AWAITING);
     const scroll = element("div", "leon-list-scroll");
     for (const row of rows) {
-      const item = button("leon-channel", `#${row.name}`, () => choose(row, Boolean(project)));
+      const item = button("leon-channel", "", () => choose(row, Boolean(project)));
+      if (row.issue) {
+        const { title, priority, statusType, statusColor } = row.issue;
+        const priorityLabel = PRIORITIES[priority ?? -1] ?? "Priority unavailable";
+        item.classList.add("leon-issue");
+        item.title = title;
+        item.setAttribute("aria-label", `${title}, ${priorityLabel}, ${AWAITING}`);
+        const priorityIcon = element(
+          "span",
+          "leon-issue-priority",
+          priority === 1 ? "!" : undefined,
+        );
+        priorityIcon.dataset.priority = priority === null ? "unknown" : String(priority);
+        priorityIcon.setAttribute("aria-hidden", "true");
+        if (priority !== 1)
+          priorityIcon.append(element("span", ""), element("span", ""), element("span", ""));
+        const circle = element("span", "leon-issue-status");
+        circle.dataset.status = statusType;
+        circle.setAttribute("aria-hidden", "true");
+        if (statusColor) circle.style.color = statusColor;
+        item.append(priorityIcon, circle, element("span", "leon-issue-title", title));
+      } else {
+        item.textContent = `#${row.name}`;
+      }
       if (state.activeRoomId === row.id) item.setAttribute("aria-current", "true");
       scroll.append(item);
     }
@@ -578,14 +609,24 @@ export default {
   async onload(zam: ZamApi) {
     const zami = zam.zami;
     if (!zami) throw new Error("Leon requires the Zami plugin API.");
-    const [rooms, { interfaceState: ui }, { auth }, clientModule, { t }] = await Promise.all([
-      zami.import("$lib/stores/rooms.svelte"),
-      zami.import("$lib/stores/interface.svelte"),
-      zami.import("$lib/stores/auth.svelte"),
-      zami.import("$lib/matrix/client"),
-      zami.import("$lib/i18n/index"),
-    ]);
-    dispose = install(zam, zami, { rooms, ui, auth, clientModule, t });
+    const [rooms, { interfaceState: ui }, { auth }, clientModule, { t }, emoji] = await Promise.all(
+      [
+        zami.import("$lib/stores/rooms.svelte"),
+        zami.import("$lib/stores/interface.svelte"),
+        zami.import("$lib/stores/auth.svelte"),
+        zami.import("$lib/matrix/client"),
+        zami.import("$lib/i18n/index"),
+        zami.import("$lib/data/emojiShortcodes").catch(() => undefined),
+      ],
+    );
+    dispose = install(zam, zami, {
+      rooms,
+      ui,
+      auth,
+      clientModule,
+      t,
+      emojiForShortcode: emoji?.emojiForShortcode,
+    });
     zami.app.loadEarly();
   },
   onunload() {
@@ -605,14 +646,13 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
   color: var(--zam-text-primary);
 }
 .leon-rail {
-  width: 4.5rem;
+  width: 7.5rem;
   flex: none;
   display: flex;
-  align-items: center;
   flex-direction: column;
   gap: 6px;
-  overflow: auto;
-  padding: 10px 5px;
+  overflow-y: auto;
+  padding: 10px 8px;
   background: var(--zam-bg-tertiary);
   scrollbar-width: thin;
 }
@@ -622,19 +662,41 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
   font-size: 10px;
   font-weight: 650;
   letter-spacing: .035em;
+  text-align: center;
 }
 .leon-project {
   flex: none;
-  width: 48px;
   min-height: 42px;
-  border-radius: 11px;
+  padding: 7px 8px;
+  border-radius: 5px;
   background: var(--zam-bg-secondary);
   font-size: 12px;
   font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .leon-project[aria-pressed="true"] {
   background: var(--zam-accent-fill);
   color: white;
+}
+.leon-project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: start;
+}
+.leon-project-icon {
+  flex: none;
+  inline-size: 16px;
+  block-size: 16px;
+  font-size: 14px;
+  line-height: 16px;
+  color: var(--zam-text-muted);
+}
+.leon-project-name {
+  min-width: 0;
 }
 .leon-list {
   min-width: 0;
@@ -666,6 +728,73 @@ html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > mai
   overflow-wrap: anywhere;
   font-size: 13px;
   color: var(--zam-text-secondary);
+}
+.leon-issue {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding-block: 6px;
+  color: var(--zam-text-primary);
+}
+.leon-issue-priority {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  width: 14px;
+  height: 13px;
+  color: var(--zam-text-secondary);
+}
+.leon-issue-priority > span {
+  width: 3px;
+  height: 5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+.leon-issue-priority > :nth-child(2) { height: 8px; }
+.leon-issue-priority > :nth-child(3) { height: 11px; }
+.leon-issue-priority[data-priority="3"] > :nth-child(3),
+.leon-issue-priority[data-priority="4"] > :nth-child(n+2) { opacity: .3; }
+.leon-issue-priority:is([data-priority="0"], [data-priority="unknown"]) {
+  align-items: center;
+  color: var(--zam-text-muted);
+  opacity: .7;
+}
+.leon-issue-priority:is([data-priority="0"], [data-priority="unknown"]) > span { height: 2px; }
+.leon-issue-priority[data-priority="1"] {
+  align-items: center;
+  border-radius: 3px;
+  background: #b73449;
+  color: white;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+}
+.leon-issue-status {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  color: #e8b510;
+}
+.leon-issue-status[data-status="backlog"] { border-style: dashed; }
+.leon-issue-status[data-status="started"]::after {
+  content: "";
+  position: absolute;
+  inset: 1.5px;
+  border-radius: 50%;
+  background: conic-gradient(currentColor 50%, transparent 0);
+}
+.leon-issue-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .leon-channel:hover, .leon-channel[aria-current], .leon-menu:hover, .leon-switcher-item:hover {
   background: var(--zam-bg-selected);

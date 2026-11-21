@@ -11,15 +11,17 @@ A Zami plugin that optimizes the UI for how Leon uses Slack.
 ## Use
 
 - **Home** opens today's `#project-YYYY-MM-DD` channel in Zami's regular chat and composer. The date follows Toronto time. If Beeper is still syncing the channel, Home opens it as soon as it arrives.
-- The **Awaiting Leon** sidebar lists the Slack issue channels awaiting you. The number on the hamburger counts channels, including ones you've already read.
+- The **Awaiting Leon** sidebar shows one row per issue, with its Linear priority, status circle, and title. Pick an issue to open its Slack chat. The number on the hamburger counts channels, including ones you've already read.
 - The server rail lists Linear project channels. Pick a project to open its chat. Pick **Home** to return to today's chat and the Awaiting Leon list.
 - Hold the hamburger and choose **Original Zami** or **Leon workspace**. Right-click and **Shift+F10** also open the menu. Zami remembers your choice on this device.
 
 ## Data
 
-The plugin reads joined Matrix rooms with Slack bridge metadata. It uses the status at the start of each `#leon-…` channel's bridged topic, which Linear Slack Sync writes when it files that issue in a Slack section. Manual section moves and archived rooms whose status and membership stay unchanged in Beeper can differ from the sidebar.
+The plugin reads joined Slack rooms through Beeper. [Linear Slack Sync](https://github.com/leonsilicon/leonsilicon.ai/tree/main/packages/ai/leonsilicon/services/linear-slack-sync) writes the priority, status, its type and color, the issue link, and the title to the Slack channel topic, which Beeper exposes as the Matrix room topic. Older topics show dashes when priority is missing and use words from the channel name when the title is missing. The daily sync refreshes existing open issues.
 
-The server rail uses `#project-…` Slack channels as Linear projects. Dailylinear provisions the dated channel and joins it to the workspace. Chat and delivery use Zami's existing Beeper session.
+Manual section moves and archived rooms with stale topic or membership state in Beeper can differ from the sidebar.
+
+The server rail uses `#project-…` Slack channels as Linear projects. Linear Slack Sync appends the project color and icon to the channel topic. Projects without bridged metadata use a neutral cube. Dailylinear provisions the dated channel and joins it to the workspace. Chat and delivery use Zami's existing Beeper session.
 
 ## Develop
 

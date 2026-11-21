@@ -54,6 +54,9 @@ export interface HostModules {
   "$lib/i18n/index": {
     t(this: void, key: "common.openRoomList"): string;
   };
+  "$lib/data/emojiShortcodes": {
+    emojiForShortcode(this: void, code: string): string | undefined;
+  };
 }
 
 export interface ZamiApi {
