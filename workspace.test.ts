@@ -4,6 +4,7 @@ import test from "node:test";
 import { slackAccountAvatar } from "./src/slack-avatar.ts";
 import {
   projectDay,
+  projectDayEnd,
   projectLabel,
   readProjectVisibility,
   workspace,
@@ -261,6 +262,16 @@ void test("the project date rolls over at midnight in Toronto in both seasons", 
   assert.equal(projectDay(new Date("2026-11-22T05:00:00Z")), "2026-11-22");
   assert.equal(projectDay(new Date("2026-07-02T03:59:59Z")), "2026-07-01");
   assert.equal(projectDay(new Date("2026-07-02T04:00:00Z")), "2026-07-02");
+});
+
+void test("a project day ends at the next midnight in Toronto, daylight saving changes included", () => {
+  const end = (now: string) => new Date(projectDayEnd(new Date(now))).toISOString();
+  assert.equal(end("2026-11-21T21:30:00Z"), "2026-11-22T05:00:00.000Z");
+  assert.equal(end("2026-11-22T04:59:59.999Z"), "2026-11-22T05:00:00.000Z");
+  assert.equal(end("2026-11-22T05:00:00Z"), "2026-11-23T05:00:00.000Z");
+  // 2026-11-01 has 25 hours in Toronto, 2026-03-08 has 23.
+  assert.equal(end("2026-11-01T04:00:00Z"), "2026-11-02T05:00:00.000Z");
+  assert.equal(end("2026-03-08T05:00:00Z"), "2026-03-09T04:00:00.000Z");
 });
 
 void test("projects use the icon and color appended to their bridged topics", () => {

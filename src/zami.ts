@@ -82,7 +82,14 @@ type AvatarFunction = "getOwnAvatarUrl" | "getMemberAvatar";
 
 export interface ZamiApi {
   import<Key extends keyof HostModules>(id: Key): Promise<HostModules[Key]>;
-  app: { loadEarly(): void };
+  app: {
+    loadEarly(): void;
+    /** The room Zami opens on. Absent in Zami builds from before launch pages. */
+    home?: {
+      set(home: { roomId: string; until?: number }): boolean;
+      clear(): void;
+    };
+  };
   styles: { add(css: string): Disposable };
   patch: {
     after<Key extends AvatarFunction>(

@@ -71,6 +71,18 @@ function projectDay(now = /* @__PURE__ */ new Date()) {
 	const fields = Object.fromEntries(TORONTO.formatToParts(now).map(({ type, value }) => [type, value]));
 	return `${fields.year}-${fields.month}-${fields.day}`;
 }
+/** The first instant after `now` that belongs to another project day: midnight in Toronto. */
+function projectDayEnd(now = /* @__PURE__ */ new Date()) {
+	const day = projectDay(now);
+	let same = now.getTime();
+	let next = same + 936e5;
+	while (next - same > 1) {
+		const middle = Math.floor((same + next) / 2);
+		if (projectDay(new Date(middle)) === day) same = middle;
+		else next = middle;
+	}
+	return next;
+}
 function projectLabel(name) {
 	const slug = name.slice(8);
 	const dated = datedProject(name);
@@ -402,6 +414,8 @@ function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, e
 	const projectVisibility = /* @__PURE__ */ new Map();
 	const visibilityRooms = /* @__PURE__ */ new Set();
 	let activeAccount = null;
+	let registeredHome = null;
+	let dayEnd;
 	let client;
 	let homeProfile;
 	let followToday = true;
@@ -458,6 +472,7 @@ function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, e
 			resetLanding();
 			schedule(true);
 		}
+		registerHome();
 		render();
 	}
 	const switcher = makeSwitcher(() => mode, selectMode);
@@ -483,6 +498,26 @@ function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, e
 		followToday = false;
 		openRoom(channel.id);
 		render();
+	}
+	function registerHome() {
+		const home = zami.app.home;
+		if (!home) return;
+		if (mode !== "leon") {
+			if (registeredHome !== "") home.clear();
+			registeredHome = "";
+			return;
+		}
+		if (!data.today || projectDay() !== day) return;
+		if (dayEnd?.day !== day) dayEnd = {
+			day,
+			at: projectDayEnd()
+		};
+		const until = dayEnd.at;
+		const key = `${activeAccount} ${data.today.id} ${until}`;
+		if (key !== registeredHome && home.set({
+			roomId: data.today.id,
+			until
+		})) registeredHome = key;
 	}
 	function updateNavigation() {
 		const id = state.activeRoomId;
@@ -755,6 +790,7 @@ function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, e
 			}
 			updateNavigation();
 		}
+		registerHome();
 		render();
 	}
 	function schedule(invalidateRooms = false) {

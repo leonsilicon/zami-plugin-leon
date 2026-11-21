@@ -60,6 +60,20 @@ export function projectDay(now = new Date()) {
   return `${fields.year}-${fields.month}-${fields.day}`;
 }
 
+/** The first instant after `now` that belongs to another project day: midnight in Toronto. */
+export function projectDayEnd(now = new Date()) {
+  const day = projectDay(now);
+  let same = now.getTime();
+  // A day is 23 to 25 hours long.
+  let next = same + 26 * 60 * 60 * 1000;
+  while (next - same > 1) {
+    const middle = Math.floor((same + next) / 2);
+    if (projectDay(new Date(middle)) === day) same = middle;
+    else next = middle;
+  }
+  return next;
+}
+
 export function projectLabel(name: string) {
   const slug = name.slice("project-".length);
   const dated = datedProject(name);

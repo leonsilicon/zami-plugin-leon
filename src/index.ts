@@ -4,6 +4,7 @@ import {
   AWAITING,
   PROJECT_VISIBILITY_CHANNEL,
   projectDay,
+  projectDayEnd,
   projectLabel,
   readProjectVisibility,
   workspace,
@@ -252,6 +253,8 @@ function install(
   >();
   const visibilityRooms = new Set<string>();
   let activeAccount: string | null = null;
+  let registeredHome: string | null = null;
+  let dayEnd: { day: string; at: number } | undefined;
   let client: MatrixClient | null | undefined;
   let homeProfile: { userId: string; roomId: string | null; avatarUrl: string | null } | undefined;
   let followToday = true;
@@ -321,6 +324,7 @@ function install(
       resetLanding();
       schedule(true);
     }
+    registerHome();
     // Update the switch anchor before returning focus from the dropdown.
     render();
   }
@@ -354,6 +358,27 @@ function install(
     followToday = false;
     openRoom(channel.id);
     render();
+  }
+
+  // Zami opens on today's project: it shows the chat as it last looked the moment the app
+  // opens, and lands in it. The registration ends with the day, so tomorrow's first launch
+  // doesn't open on today's chat.
+  function registerHome() {
+    const home = zami.app.home;
+    if (!home) return;
+    if (mode !== "leon") {
+      // Original Zami opens where it was left.
+      if (registeredHome !== "") home.clear();
+      registeredHome = "";
+      return;
+    }
+    // Until today's channel has synced, the last registration stands (or has expired).
+    // (Nor in the seconds after midnight before the day here has caught up.)
+    if (!data.today || projectDay() !== day) return;
+    if (dayEnd?.day !== day) dayEnd = { day, at: projectDayEnd() };
+    const until = dayEnd.at;
+    const key = `${activeAccount} ${data.today.id} ${until}`;
+    if (key !== registeredHome && home.set({ roomId: data.today.id, until })) registeredHome = key;
   }
 
   function updateNavigation() {
@@ -703,6 +728,7 @@ function install(
       }
       updateNavigation();
     }
+    registerHome();
     render();
   }
 
