@@ -242,7 +242,6 @@ function install(
   zami: ZamiApi,
   { rooms, ui, auth, clientModule, notifications, t, emojiForShortcode }: WorkspaceModules,
 ) {
-  const root = document.documentElement;
   const state = rooms.roomsState;
   let mode: Mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
   let day = projectDay();
@@ -318,7 +317,6 @@ function install(
     if (next === mode) return;
     mode = next;
     zam.storage.set("view", mode);
-    root.dataset.leonView = mode;
     if (mode === "leon") {
       resetLanding();
       schedule(true);
@@ -385,7 +383,6 @@ function install(
   function renderRail(project: Channel | undefined) {
     const signature = JSON.stringify([project?.id, data.projects, data.today?.id]);
     if (signature === lastRail) return;
-    lastRail = signature;
 
     const home = button("leon-project", "", openHome);
     home.append(
@@ -404,6 +401,7 @@ function install(
       item.setAttribute("aria-pressed", String(project?.id === entry.id));
       rail.append(item);
     }
+    lastRail = signature;
   }
 
   function channelButton(row: Channel, isProject: boolean) {
@@ -454,7 +452,6 @@ function install(
     }
     const signature = JSON.stringify([project, unread, read, state.activeRoomId]);
     if (signature === lastLists) return;
-    lastLists = signature;
 
     const title = element("h2", "leon-list-title", project ? "Project channel" : AWAITING);
     const scroll = element("div", "leon-list-scroll");
@@ -477,6 +474,7 @@ function install(
     const scrollTop = list.lastElementChild?.scrollTop ?? 0;
     list.replaceChildren(title, scroll);
     scroll.scrollTop = scrollTop;
+    lastLists = signature;
   }
 
   function renderProjectHeader(chat: Channel | undefined) {
@@ -488,12 +486,12 @@ function install(
     const title = projectTitle(chat);
     const signature = JSON.stringify([title, chat.project]);
     if (signature !== lastProjectHeading) {
-      lastProjectHeading = signature;
       projectHeading.title = title;
       projectHeading.replaceChildren(
         projectIcon(chat.project, emojiForShortcode),
         element("span", "leon-chat-project-title", title),
       );
+      lastProjectHeading = signature;
     }
     if (projectHeading.previousElementSibling !== menu) menu.after(projectHeading);
   }
@@ -501,17 +499,31 @@ function install(
   function bindApp() {
     const next = document.querySelector<HTMLElement>(REGION("app"));
     if (next !== app) {
-      sidebar?.removeAttribute("data-leon-sidebar");
-      app?.removeAttribute("data-leon-ready");
-      app?.removeAttribute("data-leon-collapsed");
+      resetApp();
       app = next;
     }
     main = app?.querySelector(":scope > main") ?? null;
     nativeRail = app?.querySelector(REGION("space-sidebar")) ?? null;
     nativeList = app?.querySelector(REGION("room-list")) ?? null;
-    sidebar = nativeRail?.parentElement?.parentElement ?? null;
-    if (sidebar && sidebar.parentElement === app) sidebar.dataset.leonSidebar = "";
+    const nextSidebar = nativeRail?.parentElement?.parentElement ?? null;
+    if (sidebar !== nextSidebar) sidebar?.removeAttribute("data-leon-sidebar");
+    sidebar = nextSidebar;
     mobile = ui.isMobile;
+  }
+
+  function resetApp() {
+    app?.removeAttribute("data-leon-mounted");
+    app?.removeAttribute("data-leon-ready");
+    app?.removeAttribute("data-leon-collapsed");
+    sidebar?.removeAttribute("data-leon-sidebar");
+    hiddenMenu?.removeAttribute("data-leon-hidden");
+    hiddenMenu = null;
+    rail.remove();
+    list.remove();
+    placeholder.remove();
+    menu.remove();
+    projectHeading.remove();
+    switcher.attach(null);
   }
 
   function render() {
@@ -529,8 +541,7 @@ function install(
 
     bindApp();
     if (!app || !main || !nativeRail || !nativeList) {
-      projectHeading.remove();
-      switcher.attach(null);
+      resetApp();
       return;
     }
 
@@ -543,9 +554,6 @@ function install(
         )
       : null;
     const hasChat = Boolean(chat);
-    app.toggleAttribute("data-leon-ready", hasChat);
-    app.toggleAttribute("data-leon-collapsed", custom && !mobile && collapsed);
-
     const nativeToHide = custom && nativeMenu ? nativeMenu : null;
     if (hiddenMenu !== nativeToHide) {
       hiddenMenu?.removeAttribute("data-leon-hidden");
@@ -594,6 +602,10 @@ function install(
       }
     }
     renderProjectHeader(chat);
+    if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
+    app.toggleAttribute("data-leon-ready", hasChat);
+    app.toggleAttribute("data-leon-collapsed", custom && !mobile && collapsed);
+    app.toggleAttribute("data-leon-mounted", custom);
   }
 
   function updateHomeProfile(userId: string | null, roomId: string | null) {
@@ -698,7 +710,15 @@ function install(
     refresh ||= invalidateRooms;
     if (queued || stopped) return;
     queued = true;
-    queueMicrotask(update);
+    queueMicrotask(() => {
+      try {
+        update();
+      } catch (error) {
+        // Restore Zam's controls if a host change or malformed room breaks Leon's render.
+        resetApp();
+        throw error;
+      }
+    });
   }
 
   function checkDay() {
@@ -708,7 +728,6 @@ function install(
     schedule(true);
   }
 
-  root.dataset.leonView = mode;
   const style = zami.styles.add(STYLES);
   const roomWatch = zami.runes.watch(
     () => [auth.userId, auth.syncState, state.roomsTick],
@@ -732,6 +751,7 @@ function install(
   const observer = new MutationObserver(() => {
     if (
       !app?.isConnected ||
+      !main?.isConnected ||
       !nativeRail?.isConnected ||
       !nativeList?.isConnected ||
       (header && !header.isConnected) ||
@@ -762,17 +782,8 @@ function install(
     accountAvatar.dispose();
     messageAvatar.dispose();
     if (homeProfile) state.roomsTick++;
+    resetApp();
     switcher.dispose();
-    rail.remove();
-    list.remove();
-    placeholder.remove();
-    menu.remove();
-    projectHeading.remove();
-    hiddenMenu?.removeAttribute("data-leon-hidden");
-    delete root.dataset.leonView;
-    app?.removeAttribute("data-leon-ready");
-    app?.removeAttribute("data-leon-collapsed");
-    sidebar?.removeAttribute("data-leon-sidebar");
     style.dispose();
   };
 }
@@ -810,9 +821,9 @@ export default {
 };
 
 const STYLES = `
-html[data-leon-view="leon"] :is([data-zam-region="space-sidebar"], [data-zam-region="room-list"], [data-leon-hidden]),
-html[data-leon-view="leon"] [data-leon-collapsed] > [data-leon-sidebar],
-html[data-leon-view="leon"] [data-zam-region="app"]:not([data-leon-ready]) > main > :not(.leon-placeholder) {
+[data-leon-mounted] :is([data-zam-region="space-sidebar"], [data-zam-region="room-list"], [data-leon-hidden]),
+[data-leon-mounted][data-leon-collapsed] > [data-leon-sidebar],
+[data-leon-mounted]:not([data-leon-ready]) > main > :not(.leon-placeholder) {
   display: none !important;
 }
 
