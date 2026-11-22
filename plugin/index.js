@@ -1271,7 +1271,9 @@ var STYLES = `
 }
 .leon-rail {
   /* Match Zami's 32px footer avatar and its 0.5rem padding on each side. */
-  inline-size: calc(32px + 1rem);
+  --leon-rail-compact-width: calc(32px + 1rem);
+  --leon-rail-inset: 6px;
+  inline-size: var(--leon-rail-compact-width);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -1288,20 +1290,19 @@ var STYLES = `
   gap: 4px;
   overflow: hidden auto;
   scrollbar-width: thin;
-  padding-inline: 6px;
+  padding-inline: var(--leon-rail-inset);
 }
 .leon-rail-toggle, .leon-project {
   flex: none;
-  min-block-size: 42px;
   border-radius: 6px;
 }
 .leon-rail-toggle {
   align-self: start;
   display: grid;
   place-items: center;
-  inline-size: 44px;
-  max-inline-size: calc(100% - 12px);
-  margin-inline: 6px;
+  inline-size: calc(var(--leon-rail-compact-width) - 2 * var(--leon-rail-inset));
+  max-inline-size: calc(100% - 2 * var(--leon-rail-inset));
+  margin-inline: var(--leon-rail-inset);
   color: var(--zam-text-secondary);
 }
 .leon-rail-chevrons {
@@ -1331,15 +1332,22 @@ var STYLES = `
   align-items: center;
   gap: 8px;
   min-inline-size: 0;
+  min-block-size: 42px;
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.25;
   text-align: start;
 }
+.leon-rail-toggle, .leon-rail:not([data-expanded]) .leon-project {
+  box-sizing: border-box;
+  aspect-ratio: 1;
+  min-block-size: 0;
+  padding: 0;
+}
 .leon-rail:not([data-expanded]) .leon-project {
+  inline-size: 100%;
   justify-content: center;
-  padding-inline: 0;
 }
 .leon-rail:not([data-expanded]) .leon-project-name {
   display: none;
