@@ -10,10 +10,10 @@ A Zami plugin that optimizes the UI for how Leon uses Slack.
 
 ## Use
 
-- **Home** opens today's `#project-YYYY-MM-DD` channel in Zami's regular chat and composer. The date follows Toronto time. If Beeper is still syncing the channel, Home opens it as soon as it arrives.
-- Zami opens on today's project. The plugin registers the channel as Zami's [home](https://github.com/leonsilicon/Zami/tree/trunk/packages/com/leonsilicon/zami/plugins#home-and-the-launch-page), so the chat is on screen as it last looked the moment the app opens, with a composer you can type in while the session starts. The registration ends at midnight in Toronto: the first launch of a new day waits for that day's channel. **Original Zami** opens where you left it.
+- **Home** lists **Awaiting Leon** issues from urgent to low priority, with unprioritized issues last. Pick an issue to open its Slack chat. The composer at the bottom sends to today's `#project-YYYY-MM-DD` channel, and **More** opens that room's options.
+- The plugin registers today's channel as Zami's [home](https://github.com/leonsilicon/Zami/tree/trunk/packages/com/leonsilicon/zami/plugins#home-and-the-launch-page). The date follows Toronto time. When Beeper is still syncing the channel, its composer appears as soon as it arrives. **Original Zami** opens where you left it.
 - The **Awaiting Leon** sidebar groups issues under **Unread** and **Read** and sorts each group from urgent to low priority, with unprioritized issues last. Pick an issue to open its Slack chat. The number on the hamburger counts all awaiting issues.
-- Active Linear project channels sit directly below **Home** in the drawer. Pick a project to open its chat. Pick **Home** to return to today's chat and the Awaiting Leon list.
+- Active Linear project channels sit directly below **Home** in the drawer. Pick **Today** to read today's chat, or pick another project to open its chat.
 - Hold the hamburger and choose **Original Zami** or **Leon workspace**. Right-click and **Shift+F10** also open the menu. Zami remembers your choice on this device.
 
 ## Data

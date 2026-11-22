@@ -1,8 +1,8 @@
 {
   "id": "zami-plugin-leon",
   "name": "Leon",
-  "version": "1.4.3",
-  "description": "Open today's Linear project chat in Zami and keep Awaiting Leon channels one tap away.",
+  "version": "1.5.0",
+  "description": "See priority-sorted Awaiting Leon tasks and send messages to today's Linear project from Home.",
   "author": "leonsilicon",
   "entry": "index.js",
   "capabilities": ["ui", "messages:read"]

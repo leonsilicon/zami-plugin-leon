@@ -25,6 +25,7 @@ type ClientModule = HostModules["$lib/matrix/client"];
 interface WorkspaceModules {
   rooms: HostModules["$lib/stores/rooms.svelte"];
   ui: HostModules["$lib/stores/interface.svelte"]["interfaceState"];
+  closeSidebar: HostModules["$lib/stores/interface.svelte"]["closeSidebar"];
   auth: HostModules["$lib/stores/auth.svelte"]["auth"];
   clientModule: ClientModule;
   mxcToHttp: HostModules["$lib/matrix/media"]["mxcToHttp"];
@@ -37,6 +38,8 @@ interface WorkspaceModules {
 const BRIDGE_EVENTS = ["m.bridge", "uk.half-shot.bridge"];
 const ROOM_METADATA = new Set([...BRIDGE_EVENTS, "m.room.name", "m.room.topic"]);
 const REGION = (name: string) => `[data-zam-region="${name}"]`;
+const NATIVE_TIMELINE = `${REGION("timeline")}:not(.leon-home)`;
+const NATIVE_MORE = ':scope > button[aria-haspopup="menu"][aria-expanded]:not(.leon-menu)';
 const PRIORITIES = [
   "No priority",
   "Urgent priority",
@@ -115,7 +118,7 @@ function makeSwitcher(currentMode: () => Mode, setMode: (mode: Mode) => void) {
       ["leon", "Leon workspace"],
       ["zami", "Original Zami"],
     ] as const) {
-      const item = button("leon-switcher-item", label, () => {
+      const item = button("leon-menu-item", label, () => {
         close();
         setMode(mode);
         anchor?.focus();
@@ -253,6 +256,7 @@ function install(
   {
     rooms,
     ui,
+    closeSidebar,
     auth,
     clientModule,
     mxcToHttp,
@@ -290,10 +294,13 @@ function install(
   let nativeList: HTMLElement | null = null;
   let sidebar: HTMLElement | null = null;
   let header: HTMLElement | null = null;
+  let timeline: HTMLElement | null = null;
+  let composer: HTMLElement | null = null;
   let hiddenMenu: HTMLButtonElement | null = null;
   let mobile = ui.isMobile;
   let lastRail: string | undefined;
   let lastLists: string | undefined;
+  let lastHomeTasks: string | undefined;
   let lastProjectHeading: string | undefined;
 
   const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
@@ -333,11 +340,51 @@ function install(
   rail.setAttribute("aria-label", "Linear projects");
   const list = element("section", "leon-list");
   const placeholder = element("section", "leon-placeholder");
-  const fallbackHeader = element("div", "leon-placeholder-header", "Today");
+  const fallbackHeader = element("div", "leon-placeholder-header");
+  fallbackHeader.append(element("h2", "", "Home"));
   const projectHeading = element("h2", "leon-chat-project");
   const status = element("p", "leon-status");
   status.setAttribute("role", "status");
   placeholder.append(fallbackHeader, status);
+
+  const home = element("section", "leon-home");
+  home.setAttribute("aria-label", AWAITING);
+  const homeTasks = element("div", "leon-home-tasks");
+  const taskList = element("ul", "leon-home-task-list");
+  const emptyTasks = element("p", "leon-empty", "No issues awaiting Leon");
+  homeTasks.append(element("h3", "leon-home-title", AWAITING), taskList, emptyTasks);
+  home.append(homeTasks);
+
+  const moreOptions = element("div", "leon-home-more-options");
+  moreOptions.id = "leon-home-more-options";
+  moreOptions.popover = "auto";
+  const more = button("leon-home-more", "…", () => {
+    if (!header || moreOptions.matches(":popover-open")) return;
+    const options = [...header.querySelectorAll<HTMLButtonElement>(":scope > button[title]")]
+      .filter(
+        (action) =>
+          action !== menu &&
+          action !== hiddenMenu &&
+          action !== more &&
+          action.title !== t("messageArea.searchMessages") &&
+          !action.querySelector(":is(.lucide-phone, .lucide-maximize-2)"),
+      )
+      .map((action) => {
+        const option = button("leon-menu-item", action.title, () => {
+          moreOptions.hidePopover();
+          action.click();
+        });
+        option.disabled = action.disabled;
+        return option;
+      });
+    moreOptions.replaceChildren(...options);
+    const { right, bottom } = more.getBoundingClientRect();
+    moreOptions.style.left = `${Math.max(8, right - 220)}px`;
+    moreOptions.style.top = `${bottom + 6}px`;
+  });
+  more.title = t("messageArea.moreRoomOptions");
+  more.setAttribute("aria-label", more.title);
+  more.setAttribute("popovertarget", moreOptions.id);
 
   const menu = button("leon-menu", "", () => {
     if (ui.isMobile) {
@@ -371,7 +418,12 @@ function install(
   }
   const switcher = makeSwitcher(() => mode, selectMode);
 
+  function sidebarNeedsHistory() {
+    return ui.sidebar === "pinned" || ui.sidebar === "notifications";
+  }
+
   function resetLanding() {
+    if (mode === "leon" && sidebarNeedsHistory()) closeSidebar?.();
     previousRoom = state.activeRoomId;
     followToday = true;
     selectedProject = null;
@@ -380,7 +432,13 @@ function install(
 
   function openRoom(id: string) {
     if (state.activeSpaceId !== null) rooms.setActiveSpace(null);
-    if (state.activeRoomId !== id || state.showInbox || state.showSpaceHome || state.draftDm) {
+    if (
+      state.activeRoomId !== id ||
+      state.showInbox ||
+      state.showSpaceHome ||
+      state.draftDm ||
+      ui.callViewRoomId === id
+    ) {
       rooms.setActiveRoom(id);
     } else if (ui.isMobile) {
       ui.leftOpen = false;
@@ -391,6 +449,7 @@ function install(
   function openHome() {
     resetLanding();
     if (data.today) openRoom(data.today.id);
+    else if (ui.isMobile) ui.leftOpen = false;
     render();
   }
 
@@ -401,7 +460,7 @@ function install(
     render();
   }
 
-  // Zami opens on today's project: it shows the chat as it last looked the moment the app
+  // Zami opens on today's project: it shows the room as it last looked the moment the app
   // opens, and lands in it. The registration ends with the day, so tomorrow's first launch
   // doesn't open on today's chat.
   function registerHome() {
@@ -433,6 +492,11 @@ function install(
       followToday = false;
       selectedProject = data.projects.some((project) => project.id === id) ? id : null;
     }
+    // These room actions can jump to messages, so show the full chat when they open.
+    if (followToday && id !== null && id === data.today?.id && sidebarNeedsHistory()) {
+      followToday = false;
+      selectedProject = id;
+    }
     const activeSlack = id !== null && data.channels.has(id) && !state.showInbox && !state.draftDm;
     if (data.today && (followToday || !activeSlack)) {
       if (!followToday) resetLanding();
@@ -447,7 +511,7 @@ function install(
   }
 
   function renderRail(project: Channel | undefined) {
-    const signature = JSON.stringify([project?.id, data.projects, data.today?.id]);
+    const signature = JSON.stringify([followToday, project?.id, data.projects, data.today?.id]);
     if (signature === lastRail) return;
 
     const home = button("leon-project", "", openHome);
@@ -455,7 +519,7 @@ function install(
       projectIcon({ icon: "home", color: null }, emojiForShortcode),
       element("span", "leon-project-name", "Home"),
     );
-    home.setAttribute("aria-pressed", String(!project));
+    home.setAttribute("aria-pressed", String(followToday));
     rail.replaceChildren(home);
     for (const entry of data.projects) {
       const item = button("leon-project", "", () => choose(entry, true));
@@ -543,20 +607,34 @@ function install(
     lastLists = signature;
   }
 
-  function renderProjectHeader(chat: Channel | undefined) {
-    if (!header || !chat?.project) {
+  function renderHomeTasks() {
+    const signature = JSON.stringify(data.awaiting);
+    if (lastHomeTasks === signature) return;
+    taskList.replaceChildren(
+      ...data.awaiting.map((entry) => {
+        const item = element("li", "");
+        item.append(channelButton(entry, false));
+        return item;
+      }),
+    );
+    taskList.hidden = data.awaiting.length === 0;
+    emptyTasks.hidden = data.awaiting.length > 0;
+    lastHomeTasks = signature;
+  }
+
+  function renderProjectHeader(chat: Channel | undefined, atHome: boolean) {
+    const title = atHome ? "Home" : chat?.project ? projectTitle(chat) : undefined;
+    if (!header || !title) {
       projectHeading.remove();
       return;
     }
 
-    const title = projectTitle(chat);
-    const signature = JSON.stringify([title, chat.project]);
+    const appearance = atHome ? undefined : chat?.project;
+    const signature = JSON.stringify([title, appearance]);
     if (signature !== lastProjectHeading) {
       projectHeading.title = title;
-      projectHeading.replaceChildren(
-        projectIcon(chat.project, emojiForShortcode),
-        element("span", "leon-chat-project-title", title),
-      );
+      projectHeading.replaceChildren(element("span", "leon-chat-project-title", title));
+      if (appearance) projectHeading.prepend(projectIcon(appearance, emojiForShortcode));
       lastProjectHeading = signature;
     }
     if (projectHeading.previousElementSibling !== menu) menu.after(projectHeading);
@@ -580,6 +658,7 @@ function install(
   function resetApp() {
     app?.removeAttribute("data-leon-mounted");
     app?.removeAttribute("data-leon-ready");
+    app?.removeAttribute("data-leon-home");
     app?.removeAttribute("data-leon-collapsed");
     sidebar?.removeAttribute("data-leon-sidebar");
     hiddenMenu?.removeAttribute("data-leon-hidden");
@@ -587,6 +666,9 @@ function install(
     rail.remove();
     list.remove();
     placeholder.remove();
+    home.remove();
+    more.remove();
+    moreOptions.remove();
     menu.remove();
     projectHeading.remove();
     switcher.attach(null);
@@ -594,6 +676,7 @@ function install(
 
   function render() {
     const custom = mode === "leon";
+    const atHome = custom && followToday;
     const activeRoomId = state.activeRoomId;
     const chat =
       custom &&
@@ -612,6 +695,9 @@ function install(
     }
 
     header = main.querySelector(REGION("room-header"));
+    timeline = atHome ? main.querySelector(NATIVE_TIMELINE) : null;
+    composer = timeline?.parentElement?.querySelector(REGION("composer")) ?? null;
+    if (atHome && ui.sidebar === "search") closeSidebar?.();
     const originalLabel = t("common.openRoomList");
     const escapedLabel = CSS.escape(originalLabel);
     const nativeMenu = mobile
@@ -619,7 +705,7 @@ function install(
           `button[title="${escapedLabel}"], button[aria-label="${escapedLabel}"]:not(.leon-menu)`,
         )
       : null;
-    const hasChat = Boolean(chat);
+    const hasChat = Boolean(chat && (!atHome || (header && timeline)));
     const nativeToHide = custom && nativeMenu ? nativeMenu : null;
     if (hiddenMenu !== nativeToHide) {
       hiddenMenu?.removeAttribute("data-leon-hidden");
@@ -634,8 +720,9 @@ function install(
       renderLists(project);
       if (!hasChat) {
         if (placeholder.parentNode !== main) main.append(placeholder);
-        const message =
-          auth.syncState === "SYNCING"
+        const message = data.today
+          ? "Opening Today…"
+          : auth.syncState === "SYNCING"
             ? `Waiting for #project-${day} to appear in Beeper.`
             : `Looking for #project-${day} in Beeper…`;
         if (status.textContent !== message) status.textContent = message;
@@ -671,9 +758,27 @@ function install(
         switcher.attach(menu);
       }
     }
-    renderProjectHeader(chat);
+    if (atHome) {
+      renderHomeTasks();
+      const next = hasChat ? timeline : status;
+      if (next && home.nextElementSibling !== next) next.before(home);
+      // The launch page waits for the visible timeline before handing off typed text.
+      // Here the task list fills that region once its matching room composer has mounted.
+      if (hasChat && composer) home.dataset.zamRegion = "timeline";
+      else home.removeAttribute("data-zam-region");
+    } else {
+      home.remove();
+    }
+    if (atHome && hasChat && header && !header.querySelector(NATIVE_MORE)) {
+      if (more.parentNode !== header) header.append(more, moreOptions);
+    } else {
+      more.remove();
+      moreOptions.remove();
+    }
+    renderProjectHeader(hasChat ? chat : undefined, atHome && hasChat);
     if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
     app.toggleAttribute("data-leon-ready", hasChat);
+    app.toggleAttribute("data-leon-home", atHome);
     app.toggleAttribute("data-leon-collapsed", custom && !mobile && collapsed);
     app.toggleAttribute("data-leon-mounted", custom);
   }
@@ -811,6 +916,7 @@ function install(
       state.unreadTick,
       notifications.notificationsState.tick,
       ui.isMobile,
+      ui.sidebar,
     ],
     () => schedule(),
   );
@@ -823,9 +929,11 @@ function install(
       !nativeRail?.isConnected ||
       !nativeList?.isConnected ||
       (header && !header.isConnected) ||
-      (!header &&
-        app.hasAttribute("data-leon-ready") &&
-        main?.querySelector(REGION("room-header"))) ||
+      (!header && main?.querySelector(REGION("room-header"))) ||
+      (app.hasAttribute("data-leon-home") &&
+        ((timeline ? !timeline.isConnected : main.querySelector(NATIVE_TIMELINE)) ||
+          (composer && !composer.isConnected) ||
+          (!composer && timeline?.parentElement?.querySelector(REGION("composer"))))) ||
       mobile !== ui.isMobile
     )
       schedule();
@@ -865,7 +973,7 @@ export default {
     if (!zami) throw new Error("Leon requires the Zami plugin API.");
     const [
       rooms,
-      { interfaceState: ui },
+      { interfaceState: ui, closeSidebar },
       { auth },
       clientModule,
       media,
@@ -887,6 +995,7 @@ export default {
     dispose = install(zam, zami, {
       rooms,
       ui,
+      closeSidebar,
       auth,
       clientModule,
       mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
@@ -1040,6 +1149,62 @@ const STYLES = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+[data-leon-home] [data-zam-region="room-header"] > :not(
+  .leon-menu, .leon-chat-project, .leon-home-more, .leon-home-more-options,
+  button[aria-haspopup="menu"][aria-expanded]
+) {
+  display: none !important;
+}
+[data-leon-home] .leon-chat-project { flex: 1; }
+[data-leon-home] [data-zam-region="timeline"]:not(.leon-home),
+[data-leon-home] [data-zam-region="timeline"]:not(.leon-home) ~ .absolute {
+  display: none !important;
+}
+.leon-home {
+  flex: 1 1 0;
+  min-block-size: 0;
+  min-inline-size: 0;
+  padding-inline: 16px;
+  color: var(--zam-text-primary);
+}
+.leon-home-tasks {
+  display: flex;
+  flex-direction: column;
+  block-size: 50%;
+  min-block-size: min(100%, 7rem);
+  max-inline-size: 48rem;
+  margin-inline: auto;
+}
+.leon-home-title {
+  flex: none;
+  padding: 16px 8px 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.leon-home-task-list {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.leon-home-task-list .leon-channel { min-block-size: 42px; }
+.leon-home-more {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: var(--zam-text-muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.leon-home-more-options {
+  width: min(220px, calc(100vw - 16px));
+  max-block-size: calc(100dvh - 72px);
+  overflow-y: auto;
+  inset: auto;
+  margin: 0;
+}
 .leon-list {
   min-width: 0;
   flex: 1;
@@ -1149,7 +1314,8 @@ const STYLES = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.leon-channel:hover, .leon-channel[aria-current], .leon-menu:hover, .leon-switcher-item:hover {
+.leon-channel:hover, .leon-channel[aria-current], .leon-menu:hover, .leon-menu-item:hover,
+.leon-home-more:hover {
   background: var(--zam-bg-selected);
   color: var(--zam-text-primary);
 }
@@ -1159,6 +1325,8 @@ const STYLES = `
   padding: 8px;
 }
 .leon-placeholder {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
 }
@@ -1207,17 +1375,20 @@ const STYLES = `
   text-align: center;
   pointer-events: none;
 }
-.leon-switcher {
+.leon-switcher, .leon-home-more-options {
   position: fixed;
-  z-index: 2147483000;
-  min-width: 175px;
   padding: 5px;
   border: 1px solid var(--zam-divider);
   border-radius: 10px;
   background: var(--zam-bg-tertiary);
+  color: var(--zam-text-primary);
   box-shadow: 0 8px 24px #0005;
 }
-.leon-switcher-item {
+.leon-switcher {
+  z-index: 2147483000;
+  min-width: 175px;
+}
+.leon-menu-item {
   display: block;
   width: 100%;
   text-align: start;
@@ -1225,12 +1396,12 @@ const STYLES = `
   border-radius: 6px;
   font-size: 13px;
 }
-.leon-switcher-item[aria-checked="true"] {
+.leon-menu-item[aria-checked="true"] {
   color: var(--zam-accent-text);
   font-weight: 650;
 }
 .leon-menu:focus-visible, .leon-project:focus-visible, .leon-channel:focus-visible,
-.leon-switcher-item:focus-visible {
+.leon-menu-item:focus-visible, .leon-home-more:focus-visible {
   outline: 2px solid var(--zam-accent-text);
   outline-offset: -2px;
 }

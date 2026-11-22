@@ -52,7 +52,10 @@ export interface HostModules {
     interfaceState: {
       isMobile: boolean;
       leftOpen: boolean;
+      sidebar?: string | null;
+      callViewRoomId?: string | null;
     };
+    closeSidebar?(this: void): void;
   };
   "$lib/stores/auth.svelte": {
     auth: {
@@ -81,7 +84,11 @@ export interface HostModules {
   "$lib/i18n/index": {
     t(
       this: void,
-      key: "common.openRoomList" | "messageInput.message",
+      key:
+        | "common.openRoomList"
+        | "messageArea.moreRoomOptions"
+        | "messageArea.searchMessages"
+        | "messageInput.message",
       vars?: { roomName: string },
     ): string;
   };
