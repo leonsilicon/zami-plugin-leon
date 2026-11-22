@@ -109,6 +109,10 @@ export function issueChannel(name: string) {
   if (identifier) return { identifier, slug };
 }
 
+export function linearIssueIdentifier(url: string) {
+  return url.match(LINEAR_ISSUE)?.[1]?.toLowerCase();
+}
+
 export function isSlackProtocol(id: unknown) {
   return typeof id === "string" && ["slack", "slackgo"].includes(id.toLowerCase());
 }
@@ -169,7 +173,7 @@ function linearIssue(name: string, topic: string | null): IssueDetails | null {
   // Linear Sync puts the title last so it can contain the topic separator.
   const [, type, color, priority] = workflow?.match(LINEAR_WORKFLOW) ?? [];
   const url = link?.match(SLACK_LINK)?.[1] ?? link;
-  const linkedIssue = url?.match(LINEAR_ISSUE)?.[1]?.toLowerCase();
+  const linkedIssue = url && linearIssueIdentifier(url);
   const statusName = status?.trim();
   const title = titleParts.join(TOPIC_SEPARATOR).trim();
   if (!statusName || !type || !color || !title || linkedIssue !== identifier) return null;

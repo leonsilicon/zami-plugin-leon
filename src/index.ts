@@ -9,6 +9,7 @@ import {
 } from "./chat.ts";
 import { projectIcon } from "./project-icon.ts";
 import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
+import { installTaskSummary, TASK_SUMMARY_STYLES } from "./task-summary.ts";
 import {
   AWAITING,
   channelName,
@@ -350,6 +351,7 @@ function install(
     resolveIssue,
     composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken),
   );
+  const taskSummary = installTaskSummary(clientModule);
 
   const rail = element("nav", "leon-rail");
   rail.setAttribute("aria-label", "Linear projects");
@@ -770,6 +772,7 @@ function install(
   }
 
   function resetApp() {
+    taskSummary.setRoom(null);
     chatPresentation.setMessageRoom(null, null, state.roomsTick);
     app?.removeAttribute("data-leon-mounted");
     app?.removeAttribute("data-leon-ready");
@@ -810,8 +813,8 @@ function install(
     }
 
     header = main.querySelector(REGION("room-header"));
-    timeline = atHome ? main.querySelector(NATIVE_TIMELINE) : null;
-    composer = timeline?.parentElement?.querySelector(REGION("composer")) ?? null;
+    timeline = main.querySelector(NATIVE_TIMELINE);
+    composer = atHome ? (timeline?.parentElement?.querySelector(REGION("composer")) ?? null) : null;
     if (atHome && ui.sidebar === "search") closeSidebar?.();
     const originalLabel = t("common.openRoomList");
     const escapedLabel = CSS.escape(originalLabel);
@@ -891,6 +894,7 @@ function install(
       moreOptions.remove();
     }
     renderChatHeader(hasChat ? chat : undefined, atHome && hasChat);
+    taskSummary.setRoom(timeline, atHome ? undefined : chat);
     chatPresentation.setMessageRoom(
       hasChat && chat ? clientModule.getRoom(chat.id) : null,
       auth.userId,
@@ -940,7 +944,9 @@ function install(
     if (ROOM_METADATA.has(type)) schedule(true);
     if (type === "m.room.member" && event.getRoomId() === state.activeRoomId) {
       queueMicrotask(() => {
-        if (!stopped) chatPresentation.refreshMessages();
+        if (stopped) return;
+        chatPresentation.refreshMessages();
+        taskSummary.refresh();
       });
     }
   }
@@ -1056,9 +1062,9 @@ function install(
       !nativeList?.isConnected ||
       (header && !header.isConnected) ||
       (!header && main?.querySelector(REGION("room-header"))) ||
+      (timeline ? !timeline.isConnected : main.querySelector(NATIVE_TIMELINE)) ||
       (app.hasAttribute("data-leon-home") &&
-        ((timeline ? !timeline.isConnected : main.querySelector(NATIVE_TIMELINE)) ||
-          (composer && !composer.isConnected) ||
+        ((composer && !composer.isConnected) ||
           (!composer && timeline?.parentElement?.querySelector(REGION("composer"))))) ||
       mobile !== ui.isMobile
     )
@@ -1143,6 +1149,7 @@ export default {
 };
 
 const STYLES = `
+${TASK_SUMMARY_STYLES}
 ${MESSAGE_STYLES}
 /* Cards mounted before the plugin loaded, including the saved launch page. */
 :is([data-zam-region="app"], [data-zami-launch-region="app"]) [data-event-id] div.mt-2:has(> a.no-underline:is(

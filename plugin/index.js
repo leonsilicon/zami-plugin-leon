@@ -72,6 +72,9 @@ function issueChannel(name) {
 		slug
 	};
 }
+function linearIssueIdentifier(url) {
+	return url.match(LINEAR_ISSUE)?.[1]?.toLowerCase();
+}
 function isSlackProtocol(id) {
 	return typeof id === "string" && ["slack", "slackgo"].includes(id.toLowerCase());
 }
@@ -121,7 +124,8 @@ function linearIssue(name, topic) {
 	if (!identifier || !topic) return null;
 	const [status, workflow, link, ...titleParts] = topic.split(TOPIC_SEPARATOR);
 	const [, type, color, priority] = workflow?.match(LINEAR_WORKFLOW) ?? [];
-	const linkedIssue = (link?.match(SLACK_LINK)?.[1] ?? link)?.match(LINEAR_ISSUE)?.[1]?.toLowerCase();
+	const url = link?.match(SLACK_LINK)?.[1] ?? link;
+	const linkedIssue = url && linearIssueIdentifier(url);
 	const statusName = status?.trim();
 	const title = titleParts.join(TOPIC_SEPARATOR).trim();
 	if (!statusName || !type || !color || !title || linkedIssue !== identifier) return null;
@@ -500,6 +504,94 @@ function slackAccountAvatar(accountData, roomBridges) {
 	const avatar = matches.length === 1 ? matches[0]?.avatar : void 0;
 	return typeof avatar === "string" && avatar.startsWith("mxc://") ? avatar : null;
 }
+// src/task-summary.ts
+var ROOM = "data-leon-task";
+var SUMMARY = "data-leon-task-summary";
+var TITLE = "data-leon-task-title";
+var LINEAR_SYNC = /^Linear Sync(?: \(bot\))?$/i;
+function findIntro({ timeline, channel, identifier }, rooms) {
+	const room = rooms.getRoom(channel.id);
+	if (!room) return;
+	const label = `${identifier.toUpperCase()}:`;
+	for (const row of timeline.querySelectorAll(":scope > [data-row-index] > [data-sender]")) {
+		const body = row.querySelector(".message-body");
+		const title = body?.querySelector("a[href]");
+		if (!title?.textContent?.trimStart().startsWith(label) || !body?.textContent?.trimStart().startsWith(label) || linearIssueIdentifier(title.getAttribute("href") ?? "") !== identifier) continue;
+		const member = room.getMember(row.getAttribute("data-sender") ?? "");
+		if (LINEAR_SYNC.test((member?.rawDisplayName || member?.name || "").trim())) return {
+			row,
+			title
+		};
+	}
+}
+function installTaskSummary(rooms) {
+	let active;
+	let intro;
+	function refresh() {
+		const next = active && findIntro(active, rooms);
+		if (intro?.row !== next?.row || intro?.title !== next?.title) {
+			intro?.row.removeAttribute(SUMMARY);
+			intro?.title.removeAttribute(TITLE);
+			next?.row.setAttribute(SUMMARY, "");
+			next?.title.setAttribute(TITLE, "");
+			intro = next;
+		}
+		active?.timeline.toggleAttribute(ROOM, Boolean(active.channel.issue || next));
+	}
+	const observer = new MutationObserver(refresh);
+	return {
+		refresh,
+		setRoom(timeline, channel) {
+			const identifier = channel && issueChannel(channel.name)?.identifier;
+			const next = timeline && channel && identifier ? {
+				timeline,
+				channel,
+				identifier
+			} : void 0;
+			if (active?.timeline !== next?.timeline) {
+				observer.disconnect();
+				active?.timeline.removeAttribute(ROOM);
+				if (next) observer.observe(next.timeline, {
+					childList: true,
+					subtree: true,
+					attributes: true,
+					attributeFilter: ["href", "data-sender"]
+				});
+			}
+			active = next;
+			refresh();
+		}
+	};
+}
+var SUMMARY_ROW = `[${ROOM}] [${SUMMARY}]`;
+var SUMMARY_CONTENT = `${SUMMARY_ROW} > .swipe-shift > .min-w-0`;
+var TASK_SUMMARY_STYLES = `
+[${ROOM}] > .px-4.pb-4:has(> .rounded-full + h3 + p),
+[${ROOM}] > [data-row-index]:has(> [${SUMMARY}]) > .my-4:first-child,
+${SUMMARY_ROW} > .swipe-shift > .w-10,
+${SUMMARY_CONTENT} > .items-baseline,
+${SUMMARY_CONTENT} > span.absolute.pointer-events-none {
+  display: none;
+}
+${SUMMARY_ROW} {
+  padding-block: .75rem 1.125rem;
+}
+${SUMMARY_CONTENT} > .contents > .other-bubble {
+  display: contents;
+}
+${SUMMARY_CONTENT} .message-body {
+  max-inline-size: 72ch;
+  color: var(--zam-text-primary);
+  font-size: 1rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+${SUMMARY_CONTENT} [${TITLE}] {
+  color: var(--zam-text-primary);
+  font-size: 1.25em;
+  font-weight: 650;
+}
+`;
 // src/index.ts
 var BRIDGE_EVENTS = ["m.bridge", "uk.half-shot.bridge"];
 var ROOM_METADATA = /* @__PURE__ */ new Set([
@@ -712,6 +804,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 	const preview = typeof clientModule.getUrlPreview === "function" ? zami.patch.instead(clientModule, "getUrlPreview", ([url], original) => isMatrixPreview(url) || resolveIssue(url, "") ? Promise.resolve(null) : original(url)) : void 0;
 	const roomNameToken = "LEON_ROOM_NAME";
 	const chatPresentation = installChatPresentation(resolveIssue, composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken));
+	const taskSummary = installTaskSummary(clientModule);
 	const rail = element("nav", "leon-rail");
 	rail.setAttribute("aria-label", "Linear projects");
 	const projectRows = element("div", "leon-project-rows");
@@ -1027,6 +1120,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 		mobile = ui.isMobile;
 	}
 	function resetApp() {
+		taskSummary.setRoom(null);
 		chatPresentation.setMessageRoom(null, null, state.roomsTick);
 		app?.removeAttribute("data-leon-mounted");
 		app?.removeAttribute("data-leon-ready");
@@ -1057,8 +1151,8 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 			return;
 		}
 		header = main.querySelector(REGION("room-header"));
-		timeline = atHome ? main.querySelector(NATIVE_TIMELINE) : null;
-		composer = timeline?.parentElement?.querySelector(REGION("composer")) ?? null;
+		timeline = main.querySelector(NATIVE_TIMELINE);
+		composer = atHome ? timeline?.parentElement?.querySelector(REGION("composer")) ?? null : null;
 		if (atHome && ui.sidebar === "search") closeSidebar?.();
 		const originalLabel = t("common.openRoomList");
 		const escapedLabel = CSS.escape(originalLabel);
@@ -1121,6 +1215,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 			moreOptions.remove();
 		}
 		renderChatHeader(hasChat ? chat : void 0, atHome && hasChat);
+		taskSummary.setRoom(timeline, atHome ? void 0 : chat);
 		chatPresentation.setMessageRoom(hasChat && chat ? clientModule.getRoom(chat.id) : null, auth.userId, state.roomsTick);
 		if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
 		app.toggleAttribute("data-leon-ready", hasChat);
@@ -1154,7 +1249,9 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 		const type = event.getType();
 		if (ROOM_METADATA.has(type)) schedule(true);
 		if (type === "m.room.member" && event.getRoomId() === state.activeRoomId) queueMicrotask(() => {
-			if (!stopped) chatPresentation.refreshMessages();
+			if (stopped) return;
+			chatPresentation.refreshMessages();
+			taskSummary.refresh();
 		});
 	}
 	function onTags() {
@@ -1245,7 +1342,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 		ui.sidebar
 	], () => schedule());
 	const observer = new MutationObserver(() => {
-		if (!app?.isConnected || !main?.isConnected || !nativeRail?.isConnected || !nativeList?.isConnected || header && !header.isConnected || !header && main?.querySelector(REGION("room-header")) || app.hasAttribute("data-leon-home") && ((timeline ? !timeline.isConnected : main.querySelector(NATIVE_TIMELINE)) || composer && !composer.isConnected || !composer && timeline?.parentElement?.querySelector(REGION("composer"))) || mobile !== ui.isMobile) schedule();
+		if (!app?.isConnected || !main?.isConnected || !nativeRail?.isConnected || !nativeList?.isConnected || header && !header.isConnected || !header && main?.querySelector(REGION("room-header")) || (timeline ? !timeline.isConnected : main.querySelector(NATIVE_TIMELINE)) || app.hasAttribute("data-leon-home") && (composer && !composer.isConnected || !composer && timeline?.parentElement?.querySelector(REGION("composer"))) || mobile !== ui.isMobile) schedule();
 	});
 	observer.observe(document.body, {
 		childList: true,
@@ -1315,6 +1412,7 @@ var src_default = {
 	}
 };
 var STYLES = `
+${TASK_SUMMARY_STYLES}
 ${MESSAGE_STYLES}
 /* Cards mounted before the plugin loaded, including the saved launch page. */
 :is([data-zam-region="app"], [data-zami-launch-region="app"]) [data-event-id] div.mt-2:has(> a.no-underline:is(
