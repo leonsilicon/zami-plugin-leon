@@ -30,7 +30,6 @@ export function projectIcon(
   if (emoji) {
     const element = document.createElement("span");
     element.className = "leon-project-icon leon-project-emoji";
-    if (appearance?.color) element.style.setProperty("--leon-project-color", appearance.color);
     element.setAttribute("aria-hidden", "true");
     element.textContent = emoji;
     return element;
@@ -45,8 +44,10 @@ export function projectIcon(
   svg.setAttribute("stroke-width", "2");
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
-  if (appearance?.color) svg.style.setProperty("--leon-project-color", appearance.color);
   const shape = icon.replace(/^icon[-_]?/i, "").toLowerCase();
+  if ((!icon || shape === "cube") && appearance?.color) {
+    svg.style.setProperty("--leon-project-color", appearance.color);
+  }
   const path = document.createElementNS(SVG_NS, "path");
   path.setAttribute("d", Object.hasOwn(ICON_PATHS, shape) ? ICON_PATHS[shape]! : CUBE);
   svg.append(path);

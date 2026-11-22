@@ -369,7 +369,6 @@ function projectIcon(appearance, emojiForShortcode) {
 	if (emoji) {
 		const element = document.createElement("span");
 		element.className = "leon-project-icon leon-project-emoji";
-		if (appearance?.color) element.style.setProperty("--leon-project-color", appearance.color);
 		element.setAttribute("aria-hidden", "true");
 		element.textContent = emoji;
 		return element;
@@ -383,8 +382,8 @@ function projectIcon(appearance, emojiForShortcode) {
 	svg.setAttribute("stroke-width", "2");
 	svg.setAttribute("stroke-linecap", "round");
 	svg.setAttribute("stroke-linejoin", "round");
-	if (appearance?.color) svg.style.setProperty("--leon-project-color", appearance.color);
 	const shape = icon.replace(/^icon[-_]?/i, "").toLowerCase();
+	if ((!icon || shape === "cube") && appearance?.color) svg.style.setProperty("--leon-project-color", appearance.color);
 	const path = document.createElementNS(SVG_NS, "path");
 	path.setAttribute("d", Object.hasOwn(ICON_PATHS, shape) ? ICON_PATHS[shape] : CUBE);
 	svg.append(path);
@@ -1361,9 +1360,6 @@ var STYLES = `
   color: var(--leon-project-color, currentColor);
 }
 .leon-project-emoji {
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--leon-project-color, transparent) 26%, transparent);
-  box-shadow: inset 0 0 0 1px var(--leon-project-color, transparent);
   font-size: 15px;
   line-height: 1;
 }

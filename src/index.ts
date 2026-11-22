@@ -1253,9 +1253,6 @@ const STYLES = `
   color: var(--leon-project-color, currentColor);
 }
 .leon-project-emoji {
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--leon-project-color, transparent) 26%, transparent);
-  box-shadow: inset 0 0 0 1px var(--leon-project-color, transparent);
   font-size: 15px;
   line-height: 1;
 }
