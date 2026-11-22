@@ -368,7 +368,8 @@ function projectIcon(appearance, emojiForShortcode) {
 	const emoji = shortcode ? emojiForShortcode?.(shortcode) : /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(icon) ? icon : void 0;
 	if (emoji) {
 		const element = document.createElement("span");
-		element.className = "leon-project-icon";
+		element.className = "leon-project-icon leon-project-emoji";
+		if (appearance?.color) element.style.setProperty("--leon-project-color", appearance.color);
 		element.setAttribute("aria-hidden", "true");
 		element.textContent = emoji;
 		return element;
@@ -382,7 +383,7 @@ function projectIcon(appearance, emojiForShortcode) {
 	svg.setAttribute("stroke-width", "2");
 	svg.setAttribute("stroke-linecap", "round");
 	svg.setAttribute("stroke-linejoin", "round");
-	if (appearance?.color) svg.style.color = appearance.color;
+	if (appearance?.color) svg.style.setProperty("--leon-project-color", appearance.color);
 	const shape = icon.replace(/^icon[-_]?/i, "").toLowerCase();
 	const path = document.createElementNS(SVG_NS, "path");
 	path.setAttribute("d", Object.hasOwn(ICON_PATHS, shape) ? ICON_PATHS[shape] : CUBE);
@@ -594,6 +595,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 	let followToday = true;
 	let previousRoom = null;
 	let selectedProject = null;
+	let projectsExpanded = zam.storage.get("projectsExpanded") === true;
 	let collapsed = false;
 	let stopped = false;
 	let queued = false;
@@ -624,6 +626,19 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 	const chatPresentation = installChatPresentation(resolveIssue, composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken));
 	const rail = element("nav", "leon-rail");
 	rail.setAttribute("aria-label", "Linear projects");
+	const projectRows = element("div", "leon-project-rows");
+	projectRows.id = "leon-project-rows";
+	const railToggle = button("leon-rail-toggle", "", () => {
+		projectsExpanded = !projectsExpanded;
+		updateRailExpansion();
+		zam.storage.set("projectsExpanded", projectsExpanded);
+	});
+	railToggle.setAttribute("aria-controls", projectRows.id);
+	const chevrons = element("span", "leon-rail-chevrons");
+	chevrons.setAttribute("aria-hidden", "true");
+	railToggle.append(chevrons);
+	rail.append(railToggle, projectRows);
+	updateRailExpansion();
 	const list = element("section", "leon-list");
 	const placeholder = element("section", "leon-placeholder");
 	const fallbackHeader = element("div", "leon-placeholder-header");
@@ -754,6 +769,13 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 	function projectTitle(channel) {
 		return channel.id === data.today?.id ? "Today" : projectLabel(channel.name);
 	}
+	function updateRailExpansion() {
+		const label = projectsExpanded ? "Collapse project names" : "Expand project names";
+		rail.toggleAttribute("data-expanded", projectsExpanded);
+		railToggle.setAttribute("aria-expanded", String(projectsExpanded));
+		railToggle.setAttribute("aria-label", label);
+		railToggle.title = label;
+	}
 	function renderRail(project) {
 		const signature = JSON.stringify([
 			followToday,
@@ -767,15 +789,20 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 			icon: "home",
 			color: null
 		}, emojiForShortcode), element("span", "leon-project-name", "Home"));
+		home.setAttribute("aria-label", "Home");
+		home.title = "Home";
 		home.setAttribute("aria-pressed", String(followToday));
-		rail.replaceChildren(home);
+		const rows = [home];
 		for (const entry of data.projects) {
+			const title = projectTitle(entry);
 			const item = button("leon-project", "", () => choose(entry, true));
-			item.append(projectIcon(entry.project, emojiForShortcode), element("span", "leon-project-name", projectTitle(entry)));
-			item.title = `#${entry.name}`;
+			item.append(projectIcon(entry.project, emojiForShortcode), element("span", "leon-project-name", title));
+			item.setAttribute("aria-label", title);
+			item.title = title;
 			item.setAttribute("aria-pressed", String(project?.id === entry.id));
-			rail.append(item);
+			rows.push(item);
 		}
+		projectRows.replaceChildren(...rows);
 		lastRail = signature;
 	}
 	function channelButton(row, isProject) {
@@ -1219,49 +1246,103 @@ var STYLES = `
   color: var(--zam-text-primary);
 }
 .leon-rail {
-  width: 7.5rem;
+  inline-size: 3.5rem;
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  overflow-y: auto;
-  padding: 10px 8px;
+  gap: 4px;
+  padding-block: 6px;
   background: var(--zam-bg-tertiary);
+}
+.leon-rail[data-expanded] {
+  inline-size: min(10rem, 54%);
+}
+.leon-project-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden auto;
   scrollbar-width: thin;
+  padding-inline: 6px;
+}
+.leon-rail-toggle, .leon-project {
+  flex: none;
+  min-block-size: 42px;
+  border-radius: 6px;
+}
+.leon-rail-toggle {
+  align-self: start;
+  display: grid;
+  place-items: center;
+  inline-size: 44px;
+  margin-inline: 6px;
+  color: var(--zam-text-secondary);
+}
+.leon-rail-chevrons {
+  position: relative;
+  inline-size: 18px;
+  block-size: 18px;
+}
+.leon-rail-chevrons::before, .leon-rail-chevrons::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 3px;
+  width: 8px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 2px 2px 0 0;
+  transform: rotate(45deg);
+}
+.leon-rail-chevrons::after {
+  left: 8px;
+}
+.leon-rail-toggle[aria-expanded="true"] .leon-rail-chevrons {
+  transform: scaleX(-1);
 }
 .leon-project {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex: none;
-  min-height: 42px;
-  padding: 7px 8px;
-  border-radius: 5px;
-  background: var(--zam-bg-secondary);
+  gap: 8px;
+  min-inline-size: 0;
+  padding: 5px 10px;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.25;
   text-align: start;
-  white-space: normal;
-  overflow-wrap: anywhere;
+}
+.leon-rail:not([data-expanded]) .leon-project {
+  justify-content: center;
+  padding-inline: 0;
+}
+.leon-rail:not([data-expanded]) .leon-project-name {
+  display: none;
+}
+.leon-rail-toggle:hover, .leon-project:hover, .leon-project[aria-pressed="true"] {
+  background: var(--zam-bg-selected);
+  color: var(--zam-text-primary);
 }
 .leon-project[aria-pressed="true"] {
-  background: var(--zam-accent-fill);
-  color: white;
+  box-shadow: inset 2px 0 var(--zam-accent-text);
 }
 .leon-project-icon {
+  display: inline-grid;
+  place-items: center;
   flex: none;
-  inline-size: 16px;
-  block-size: 16px;
-  font-size: 14px;
-  line-height: 16px;
-  color: var(--zam-text-muted);
+  inline-size: 24px;
+  block-size: 24px;
+  color: var(--leon-project-color, currentColor);
 }
-.leon-project[aria-pressed="true"] .leon-project-icon {
-  color: inherit;
+.leon-project-emoji {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--leon-project-color, transparent) 26%, transparent);
+  box-shadow: inset 0 0 0 1px var(--leon-project-color, transparent);
+  font-size: 15px;
+  line-height: 1;
 }
 .leon-project-name {
-  min-width: 0;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 [data-zam-region="room-header"]:has(> .leon-chat-project) > :is(
   h2:not(.leon-chat-project),
@@ -1541,8 +1622,8 @@ var STYLES = `
   color: var(--zam-accent-text);
   font-weight: 650;
 }
-.leon-menu:focus-visible, .leon-project:focus-visible, .leon-channel:focus-visible,
-.leon-menu-item:focus-visible, .leon-home-more:focus-visible {
+.leon-menu:focus-visible, .leon-rail-toggle:focus-visible, .leon-project:focus-visible,
+.leon-channel:focus-visible, .leon-menu-item:focus-visible, .leon-home-more:focus-visible {
   outline: 2px solid var(--zam-accent-text);
   outline-offset: -2px;
 }

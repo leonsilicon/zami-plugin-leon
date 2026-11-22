@@ -14,6 +14,7 @@ A Zami plugin that optimizes the UI for how Leon uses Slack.
 - The plugin registers today's channel as Zami's [home](https://github.com/leonsilicon/Zami/tree/trunk/packages/com/leonsilicon/zami/plugins#home-and-the-launch-page). The date follows Toronto time. When Beeper is still syncing the channel, its composer appears as soon as it arrives. **Original Zami** opens where you left it.
 - The **Awaiting Leon** sidebar groups issues under **Unread** and **Read** and sorts each group from urgent to low priority, with unprioritized issues last. Pick an issue to open its Slack chat. The number on the hamburger counts all awaiting issues.
 - Active Linear project channels sit directly below **Home** in the drawer. Pick **Today** to read today's chat, or pick another project to open its chat.
+- The project column starts with icons in their Linear colors. Use the double chevrons at the top to show or hide project names. Zami remembers your choice on this device.
 - Hold the hamburger and choose **Original Zami** or **Leon workspace**. Right-click and **Shift+F10** also open the menu. Zami remembers your choice on this device.
 
 ## Data
