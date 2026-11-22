@@ -406,7 +406,7 @@ function makeSwitcher(currentMode, setMode) {
 		}
 	};
 }
-function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, emojiForShortcode }) {
+function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifications, t, emojiForShortcode }) {
 	const state = rooms.roomsState;
 	let mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
 	let day = projectDay();
@@ -437,10 +437,10 @@ function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, e
 	let lastLists;
 	let lastProjectHeading;
 	const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
-		if (homeProfile && homeProfile.userId === auth.userId) return homeProfile.avatarUrl;
+		if (homeProfile && homeProfile.userId === auth.userId) return homeProfile.avatarUrl ?? void 0;
 	});
 	const messageAvatar = zami.patch.after(clientModule, "getMemberAvatar", (_, [room, userId]) => {
-		if (homeProfile?.roomId === room.roomId && homeProfile.userId === userId && userId === auth.userId) return homeProfile.avatarUrl;
+		if (homeProfile?.roomId === room.roomId && homeProfile.userId === userId && userId === auth.userId) return homeProfile.avatarUrl ?? void 0;
 	});
 	const rail = element("nav", "leon-rail");
 	rail.setAttribute("aria-label", "Linear projects");
@@ -726,7 +726,8 @@ function install(zam, zami, { rooms, ui, auth, clientModule, notifications, t, e
 			return;
 		}
 		const bridgeRoomId = roomId ?? data.today?.id;
-		const avatarUrl = client?.getUserId() === userId ? clientModule.mxcToHttp(slackAccountAvatar(zam.matrix.getAccountData(BRIDGE_ACCOUNT_DATA), bridgeRoomId ? readBridges(zam.matrix, bridgeRoomId) : [])) : null;
+		const avatarMxc = client?.getUserId() === userId ? slackAccountAvatar(zam.matrix.getAccountData(BRIDGE_ACCOUNT_DATA), bridgeRoomId ? readBridges(zam.matrix, bridgeRoomId) : []) : null;
+		const avatarUrl = avatarMxc ? mxcToHttp?.(avatarMxc) ?? null : null;
 		if (homeProfile?.userId === userId && homeProfile.roomId === roomId && homeProfile.avatarUrl === avatarUrl) return;
 		homeProfile = {
 			userId,
@@ -863,11 +864,12 @@ var src_default = {
 	async onload(zam) {
 		const zami = zam.zami;
 		if (!zami) throw new Error("Leon requires the Zami plugin API.");
-		const [rooms, { interfaceState: ui }, { auth }, clientModule, notifications, { t }, emoji] = await Promise.all([
+		const [rooms, { interfaceState: ui }, { auth }, clientModule, media, notifications, { t }, emoji] = await Promise.all([
 			zami.import("$lib/stores/rooms.svelte"),
 			zami.import("$lib/stores/interface.svelte"),
 			zami.import("$lib/stores/auth.svelte"),
 			zami.import("$lib/matrix/client"),
+			zami.import("$lib/matrix/media").catch(() => void 0),
 			zami.import("$lib/stores/notifications.svelte"),
 			zami.import("$lib/i18n/index"),
 			zami.import("$lib/data/emojiShortcodes").catch(() => void 0)
@@ -877,6 +879,7 @@ var src_default = {
 			ui,
 			auth,
 			clientModule,
+			mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
 			notifications,
 			t,
 			emojiForShortcode: emoji?.emojiForShortcode

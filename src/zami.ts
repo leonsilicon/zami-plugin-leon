@@ -67,7 +67,10 @@ export interface HostModules {
     roomHasThreadUnread(room: Room): boolean;
     getOwnAvatarUrl(): string | null;
     getMemberAvatar(room: Room, userId: string): string | null;
-    mxcToHttp(mxc: string | null): string | null;
+    mxcToHttp?(this: void, mxc: string): string | null;
+  };
+  "$lib/matrix/media": {
+    mxcToHttp?(this: void, mxc: string): string | null;
   };
   "$lib/i18n/index": {
     t(this: void, key: "common.openRoomList"): string;

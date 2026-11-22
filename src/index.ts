@@ -20,6 +20,7 @@ interface WorkspaceModules {
   ui: HostModules["$lib/stores/interface.svelte"]["interfaceState"];
   auth: HostModules["$lib/stores/auth.svelte"]["auth"];
   clientModule: ClientModule;
+  mxcToHttp: HostModules["$lib/matrix/media"]["mxcToHttp"];
   notifications: HostModules["$lib/stores/notifications.svelte"];
   t: HostModules["$lib/i18n/index"]["t"];
   emojiForShortcode?: HostModules["$lib/data/emojiShortcodes"]["emojiForShortcode"];
@@ -241,7 +242,16 @@ function makeSwitcher(currentMode: () => Mode, setMode: (mode: Mode) => void) {
 function install(
   zam: ZamApi,
   zami: ZamiApi,
-  { rooms, ui, auth, clientModule, notifications, t, emojiForShortcode }: WorkspaceModules,
+  {
+    rooms,
+    ui,
+    auth,
+    clientModule,
+    mxcToHttp,
+    notifications,
+    t,
+    emojiForShortcode,
+  }: WorkspaceModules,
 ) {
   const state = rooms.roomsState;
   let mode: Mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
@@ -278,7 +288,8 @@ function install(
   let lastProjectHeading: string | undefined;
 
   const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
-    if (homeProfile && homeProfile.userId === auth.userId) return homeProfile.avatarUrl;
+    if (homeProfile && homeProfile.userId === auth.userId)
+      return homeProfile.avatarUrl ?? undefined;
   });
   const messageAvatar = zami.patch.after(clientModule, "getMemberAvatar", (_, [room, userId]) => {
     if (
@@ -286,7 +297,7 @@ function install(
       homeProfile.userId === userId &&
       userId === auth.userId
     )
-      return homeProfile.avatarUrl;
+      return homeProfile.avatarUrl ?? undefined;
   });
 
   const rail = element("nav", "leon-rail");
@@ -642,15 +653,14 @@ function install(
       return;
     }
     const bridgeRoomId = roomId ?? data.today?.id;
-    const avatarUrl =
+    const avatarMxc =
       client?.getUserId() === userId
-        ? clientModule.mxcToHttp(
-            slackAccountAvatar(
-              zam.matrix.getAccountData(BRIDGE_ACCOUNT_DATA),
-              bridgeRoomId ? readBridges(zam.matrix, bridgeRoomId) : [],
-            ),
+        ? slackAccountAvatar(
+            zam.matrix.getAccountData(BRIDGE_ACCOUNT_DATA),
+            bridgeRoomId ? readBridges(zam.matrix, bridgeRoomId) : [],
           )
         : null;
+    const avatarUrl = avatarMxc ? (mxcToHttp?.(avatarMxc) ?? null) : null;
     if (
       homeProfile?.userId === userId &&
       homeProfile.roomId === roomId &&
@@ -819,21 +829,31 @@ export default {
   async onload(zam: ZamApi) {
     const zami = zam.zami;
     if (!zami) throw new Error("Leon requires the Zami plugin API.");
-    const [rooms, { interfaceState: ui }, { auth }, clientModule, notifications, { t }, emoji] =
-      await Promise.all([
-        zami.import("$lib/stores/rooms.svelte"),
-        zami.import("$lib/stores/interface.svelte"),
-        zami.import("$lib/stores/auth.svelte"),
-        zami.import("$lib/matrix/client"),
-        zami.import("$lib/stores/notifications.svelte"),
-        zami.import("$lib/i18n/index"),
-        zami.import("$lib/data/emojiShortcodes").catch(() => undefined),
-      ]);
+    const [
+      rooms,
+      { interfaceState: ui },
+      { auth },
+      clientModule,
+      media,
+      notifications,
+      { t },
+      emoji,
+    ] = await Promise.all([
+      zami.import("$lib/stores/rooms.svelte"),
+      zami.import("$lib/stores/interface.svelte"),
+      zami.import("$lib/stores/auth.svelte"),
+      zami.import("$lib/matrix/client"),
+      zami.import("$lib/matrix/media").catch(() => undefined),
+      zami.import("$lib/stores/notifications.svelte"),
+      zami.import("$lib/i18n/index"),
+      zami.import("$lib/data/emojiShortcodes").catch(() => undefined),
+    ]);
     dispose = install(zam, zami, {
       rooms,
       ui,
       auth,
       clientModule,
+      mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
       notifications,
       t,
       emojiForShortcode: emoji?.emojiForShortcode,
