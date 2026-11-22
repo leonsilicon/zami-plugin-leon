@@ -637,6 +637,7 @@ function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifica
 	const menuIcon = element("span", "leon-menu-icon");
 	menuIcon.setAttribute("aria-hidden", "true");
 	const badge = element("span", "leon-badge");
+	badge.hidden = true;
 	badge.setAttribute("aria-hidden", "true");
 	menu.append(menuIcon, badge);
 	function selectMode(next) {
@@ -867,9 +868,10 @@ function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifica
 			menu.classList.toggle("leon-menu-overlay", hasChat && !chatHeader);
 			switcher.attach(menu);
 			const count = data.awaiting.length;
-			if (badge.textContent !== String(count)) badge.textContent = String(count);
-			badge.hidden = false;
-			menu.setAttribute("aria-label", `Open room list, ${count} ${AWAITING}`);
+			const badgeText = count > 0 ? String(count) : "";
+			if (badge.textContent !== badgeText) badge.textContent = badgeText;
+			badge.hidden = count === 0;
+			menu.setAttribute("aria-label", count > 0 ? `Open room list, ${count} ${AWAITING}` : originalLabel);
 		} else {
 			rail.remove();
 			list.remove();
