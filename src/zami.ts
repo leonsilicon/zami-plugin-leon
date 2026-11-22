@@ -3,10 +3,11 @@ export interface BridgeState {
   content: Record<string, unknown>;
 }
 
-interface Room {
+export interface Room {
   roomId: string;
   name: string;
   tags?: Record<string, unknown>;
+  getMember(userId: string): { rawDisplayName?: string; name?: string } | null;
   isSpaceRoom(): boolean;
 }
 

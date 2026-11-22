@@ -1,5 +1,5 @@
 import { issueChannel, type Channel, type workspace } from "./workspace.ts";
-import type { MatrixLink } from "./zami.ts";
+import type { MatrixLink, Room } from "./zami.ts";
 
 type IssueLinks = Pick<ReturnType<typeof workspace>, "channels" | "slackIssues">;
 
@@ -85,6 +85,9 @@ export function composerPlaceholder(template: string, token: string) {
 const LINK = '[data-zam-region="app"] .message-body a[href]';
 const EDITOR = '[data-zam-region="composer"] [role="textbox"][placeholder]';
 const EDITOR_ATTRIBUTES = ["placeholder", "aria-label"] as const;
+const MESSAGE = '[data-zam-region="app"] > main [data-event-id][data-sender]';
+const AUTHOR_ATTRIBUTE = "data-leon-author";
+const HERMES_NAME = /^(?:hermes|captain claude)(?: \(slack\))?$/i;
 
 export function issueStatusIcon(statusType = "unknown", statusColor?: string | null) {
   const icon = document.createElement("span");
@@ -119,6 +122,27 @@ export function installChatPresentation(
 ) {
   const links = new WeakMap<Element, { original: Node[]; chip: HTMLElement; key: string }>();
   const editors = new WeakMap<Element, Map<string, { original: string; normalized: string }>>();
+  let messageRoom: Room | null = null;
+  let ownUserId: string | null = null;
+  let roomsTick: number | undefined;
+
+  function messageAuthor(sender: string | null) {
+    if (!messageRoom || !sender) return;
+    if (sender === ownUserId) return "own";
+    const member = messageRoom.getMember(sender);
+    if (HERMES_NAME.test((member?.rawDisplayName || member?.name || "").trim())) return "hermes";
+  }
+
+  function updateMessage(row: Element) {
+    const author = messageAuthor(row.getAttribute("data-sender"));
+    if (row.getAttribute(AUTHOR_ATTRIBUTE) === (author ?? null)) return;
+    if (author) row.setAttribute(AUTHOR_ATTRIBUTE, author);
+    else row.removeAttribute(AUTHOR_ATTRIBUTE);
+  }
+
+  function refreshMessages() {
+    document.querySelectorAll(MESSAGE).forEach(updateMessage);
+  }
 
   function updateLink(link: Element) {
     const saved = links.get(link);
@@ -157,9 +181,11 @@ export function installChatPresentation(
     if (root instanceof Element) {
       if (root.matches(LINK)) updateLink(root);
       if (root.matches(EDITOR)) updateEditor(root);
+      if (messageRoom && root.matches(MESSAGE)) updateMessage(root);
     }
     root.querySelectorAll(LINK).forEach(updateLink);
     root.querySelectorAll(EDITOR).forEach(updateEditor);
+    if (messageRoom) root.querySelectorAll(MESSAGE).forEach(updateMessage);
   }
 
   const observer = new MutationObserver((mutations) => {
@@ -168,6 +194,8 @@ export function installChatPresentation(
       if (!(target instanceof Element) || !target.isConnected) continue;
       if (target.matches(EDITOR)) updateEditor(target);
       if (target.matches(LINK)) updateLink(target);
+      if (mutation.attributeName === "data-sender" && target.matches(MESSAGE))
+        updateMessage(target);
       for (const node of mutation.addedNodes) {
         if (node instanceof Element && node.isConnected) scan(node);
       }
@@ -177,14 +205,25 @@ export function installChatPresentation(
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["href", ...EDITOR_ATTRIBUTES],
+    attributeFilter: ["href", "data-sender", ...EDITOR_ATTRIBUTES],
   });
   scan(document);
 
   return {
     refreshIssues: () => document.querySelectorAll(LINK).forEach(updateLink),
+    setMessageRoom(room: Room | null, userId: string | null, tick: number) {
+      if (messageRoom === room && (!room || (ownUserId === userId && roomsTick === tick))) return;
+      messageRoom = room;
+      ownUserId = userId;
+      roomsTick = tick;
+      refreshMessages();
+    },
+    refreshMessages,
     dispose() {
       observer.disconnect();
+      document.querySelectorAll(`[${AUTHOR_ATTRIBUTE}]`).forEach((row) => {
+        row.removeAttribute(AUTHOR_ATTRIBUTE);
+      });
       document.querySelectorAll(LINK).forEach((link) => {
         const saved = links.get(link);
         if (saved && link.childNodes.length === 1 && link.firstChild === saved.chip)
@@ -198,3 +237,42 @@ export function installChatPresentation(
     },
   };
 }
+
+const AUTHORS = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}]`;
+const OWN_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="own"] > .swipe-shift > .min-w-0`;
+const HERMES_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="hermes"] > .swipe-shift > .min-w-0`;
+const OWN_BUBBLE = `${OWN_CONTENT} > :is(.contents, .forward-block) > :is(.contents, .own-bubble):has(> .message-body)`;
+
+export const MESSAGE_STYLES = `
+${AUTHORS} > .swipe-shift > .w-10 { display: none; }
+${AUTHORS} > .swipe-shift > .min-w-0 > span.absolute.pointer-events-none { display: none; }
+${OWN_CONTENT} {
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+}
+${OWN_CONTENT} > .items-baseline > button.font-semibold { display: none; }
+${OWN_CONTENT} > button.w-full { max-inline-size: 80%; }
+${OWN_CONTENT} > .forward-block { max-inline-size: 100%; }
+${OWN_CONTENT} > :is(.contents, .forward-block) > .w-fit.max-w-full {
+  max-inline-size: min(80%, 42rem);
+}
+${OWN_BUBBLE} {
+  display: block;
+  inline-size: fit-content;
+  max-inline-size: min(80%, 42rem);
+  margin-inline-start: auto;
+  padding: .5rem .85rem;
+  border-radius: 1rem;
+  background: var(--zam-bg-selected);
+}
+${OWN_BUBBLE}::after { display: none; }
+${OWN_BUBBLE} > .message-body {
+  color: var(--zam-text-primary);
+  overflow-wrap: anywhere;
+}
+${OWN_BUBBLE} .message-body :is(a, .room-mention) {
+  color: var(--zam-link, var(--zam-accent-text));
+}
+${HERMES_CONTENT} > :is(.contents, .forward-block) > .other-bubble { display: contents; }
+`;

@@ -5,6 +5,7 @@ import {
   issueForLink,
   issueStatusIcon,
   issueTitle,
+  MESSAGE_STYLES,
 } from "./chat.ts";
 import { projectIcon } from "./project-icon.ts";
 import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
@@ -769,6 +770,7 @@ function install(
   }
 
   function resetApp() {
+    chatPresentation.setMessageRoom(null, null, state.roomsTick);
     app?.removeAttribute("data-leon-mounted");
     app?.removeAttribute("data-leon-ready");
     app?.removeAttribute("data-leon-home");
@@ -889,6 +891,11 @@ function install(
       moreOptions.remove();
     }
     renderChatHeader(hasChat ? chat : undefined, atHome && hasChat);
+    chatPresentation.setMessageRoom(
+      hasChat && chat ? clientModule.getRoom(chat.id) : null,
+      auth.userId,
+      state.roomsTick,
+    );
     if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
     app.toggleAttribute("data-leon-ready", hasChat);
     app.toggleAttribute("data-leon-home", atHome);
@@ -929,7 +936,13 @@ function install(
   }
 
   function onState(event: MatrixEvent) {
-    if (ROOM_METADATA.has(event.getType())) schedule(true);
+    const type = event.getType();
+    if (ROOM_METADATA.has(type)) schedule(true);
+    if (type === "m.room.member" && event.getRoomId() === state.activeRoomId) {
+      queueMicrotask(() => {
+        if (!stopped) chatPresentation.refreshMessages();
+      });
+    }
   }
 
   function onTags() {
@@ -1130,6 +1143,7 @@ export default {
 };
 
 const STYLES = `
+${MESSAGE_STYLES}
 /* Cards mounted before the plugin loaded, including the saved launch page. */
 :is([data-zam-region="app"], [data-zami-launch-region="app"]) [data-event-id] div.mt-2:has(> a.no-underline:is(
   [href="https://matrix.to" i], [href="http://matrix.to" i],

@@ -1,7 +1,7 @@
 {
   "id": "zami-plugin-leon",
   "name": "Leon",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "See priority-sorted Awaiting Leon tasks and send messages to today's Linear project from Home.",
   "author": "leonsilicon",
   "entry": "index.js",

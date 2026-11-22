@@ -250,6 +250,9 @@ function composerPlaceholder(template, token) {
 var LINK = "[data-zam-region=\"app\"] .message-body a[href]";
 var EDITOR = "[data-zam-region=\"composer\"] [role=\"textbox\"][placeholder]";
 var EDITOR_ATTRIBUTES = ["placeholder", "aria-label"];
+var MESSAGE = "[data-zam-region=\"app\"] > main [data-event-id][data-sender]";
+var AUTHOR_ATTRIBUTE = "data-leon-author";
+var HERMES_NAME = /^(?:hermes|captain claude)(?: \(slack\))?$/i;
 function issueStatusIcon(statusType = "unknown", statusColor) {
 	const icon = document.createElement("span");
 	icon.className = "leon-issue-status";
@@ -277,6 +280,24 @@ function issueChip(issue) {
 function installChatPresentation(resolveIssue, normalizePlaceholder) {
 	const links = /* @__PURE__ */ new WeakMap();
 	const editors = /* @__PURE__ */ new WeakMap();
+	let messageRoom = null;
+	let ownUserId = null;
+	let roomsTick;
+	function messageAuthor(sender) {
+		if (!messageRoom || !sender) return;
+		if (sender === ownUserId) return "own";
+		const member = messageRoom.getMember(sender);
+		if (HERMES_NAME.test((member?.rawDisplayName || member?.name || "").trim())) return "hermes";
+	}
+	function updateMessage(row) {
+		const author = messageAuthor(row.getAttribute("data-sender"));
+		if (row.getAttribute(AUTHOR_ATTRIBUTE) === (author ?? null)) return;
+		if (author) row.setAttribute(AUTHOR_ATTRIBUTE, author);
+		else row.removeAttribute(AUTHOR_ATTRIBUTE);
+	}
+	function refreshMessages() {
+		document.querySelectorAll(MESSAGE).forEach(updateMessage);
+	}
 	function updateLink(link) {
 		const saved = links.get(link);
 		const decorated = saved && link.childNodes.length === 1 && link.firstChild === saved.chip;
@@ -319,9 +340,11 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 		if (root instanceof Element) {
 			if (root.matches(LINK)) updateLink(root);
 			if (root.matches(EDITOR)) updateEditor(root);
+			if (messageRoom && root.matches(MESSAGE)) updateMessage(root);
 		}
 		root.querySelectorAll(LINK).forEach(updateLink);
 		root.querySelectorAll(EDITOR).forEach(updateEditor);
+		if (messageRoom) root.querySelectorAll(MESSAGE).forEach(updateMessage);
 	}
 	const observer = new MutationObserver((mutations) => {
 		for (const mutation of mutations) {
@@ -329,6 +352,7 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 			if (!(target instanceof Element) || !target.isConnected) continue;
 			if (target.matches(EDITOR)) updateEditor(target);
 			if (target.matches(LINK)) updateLink(target);
+			if (mutation.attributeName === "data-sender" && target.matches(MESSAGE)) updateMessage(target);
 			for (const node of mutation.addedNodes) if (node instanceof Element && node.isConnected) scan(node);
 		}
 	});
@@ -336,13 +360,28 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 		childList: true,
 		subtree: true,
 		attributes: true,
-		attributeFilter: ["href", ...EDITOR_ATTRIBUTES]
+		attributeFilter: [
+			"href",
+			"data-sender",
+			...EDITOR_ATTRIBUTES
+		]
 	});
 	scan(document);
 	return {
 		refreshIssues: () => document.querySelectorAll(LINK).forEach(updateLink),
+		setMessageRoom(room, userId, tick) {
+			if (messageRoom === room && (!room || ownUserId === userId && roomsTick === tick)) return;
+			messageRoom = room;
+			ownUserId = userId;
+			roomsTick = tick;
+			refreshMessages();
+		},
+		refreshMessages,
 		dispose() {
 			observer.disconnect();
+			document.querySelectorAll(`[${AUTHOR_ATTRIBUTE}]`).forEach((row) => {
+				row.removeAttribute(AUTHOR_ATTRIBUTE);
+			});
 			document.querySelectorAll(LINK).forEach((link) => {
 				const saved = links.get(link);
 				if (saved && link.childNodes.length === 1 && link.firstChild === saved.chip) link.replaceChildren(...saved.original);
@@ -353,6 +392,43 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 		}
 	};
 }
+var AUTHORS = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}]`;
+var OWN_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="own"] > .swipe-shift > .min-w-0`;
+var HERMES_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="hermes"] > .swipe-shift > .min-w-0`;
+var OWN_BUBBLE = `${OWN_CONTENT} > :is(.contents, .forward-block) > :is(.contents, .own-bubble):has(> .message-body)`;
+var MESSAGE_STYLES = `
+${AUTHORS} > .swipe-shift > .w-10 { display: none; }
+${AUTHORS} > .swipe-shift > .min-w-0 > span.absolute.pointer-events-none { display: none; }
+${OWN_CONTENT} {
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+}
+${OWN_CONTENT} > .items-baseline > button.font-semibold { display: none; }
+${OWN_CONTENT} > button.w-full { max-inline-size: 80%; }
+${OWN_CONTENT} > .forward-block { max-inline-size: 100%; }
+${OWN_CONTENT} > :is(.contents, .forward-block) > .w-fit.max-w-full {
+  max-inline-size: min(80%, 42rem);
+}
+${OWN_BUBBLE} {
+  display: block;
+  inline-size: fit-content;
+  max-inline-size: min(80%, 42rem);
+  margin-inline-start: auto;
+  padding: .5rem .85rem;
+  border-radius: 1rem;
+  background: var(--zam-bg-selected);
+}
+${OWN_BUBBLE}::after { display: none; }
+${OWN_BUBBLE} > .message-body {
+  color: var(--zam-text-primary);
+  overflow-wrap: anywhere;
+}
+${OWN_BUBBLE} .message-body :is(a, .room-mention) {
+  color: var(--zam-link, var(--zam-accent-text));
+}
+${HERMES_CONTENT} > :is(.contents, .forward-block) > .other-bubble { display: contents; }
+`;
 // src/project-icon.ts
 var SVG_NS = "http://www.w3.org/2000/svg";
 var CUBE = "M12 3 3.5 7.75v8.5L12 21l8.5-4.75v-8.5L12 3Z M3.5 7.75 12 12.5l8.5-4.75 M12 12.5V21";
@@ -951,6 +1027,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 		mobile = ui.isMobile;
 	}
 	function resetApp() {
+		chatPresentation.setMessageRoom(null, null, state.roomsTick);
 		app?.removeAttribute("data-leon-mounted");
 		app?.removeAttribute("data-leon-ready");
 		app?.removeAttribute("data-leon-home");
@@ -1044,6 +1121,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 			moreOptions.remove();
 		}
 		renderChatHeader(hasChat ? chat : void 0, atHome && hasChat);
+		chatPresentation.setMessageRoom(hasChat && chat ? clientModule.getRoom(chat.id) : null, auth.userId, state.roomsTick);
 		if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
 		app.toggleAttribute("data-leon-ready", hasChat);
 		app.toggleAttribute("data-leon-home", atHome);
@@ -1073,7 +1151,11 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 		if (event.getType() === "com.beeper.bridge_state") schedule();
 	}
 	function onState(event) {
-		if (ROOM_METADATA.has(event.getType())) schedule(true);
+		const type = event.getType();
+		if (ROOM_METADATA.has(type)) schedule(true);
+		if (type === "m.room.member" && event.getRoomId() === state.activeRoomId) queueMicrotask(() => {
+			if (!stopped) chatPresentation.refreshMessages();
+		});
 	}
 	function onTags() {
 		schedule(true);
@@ -1233,6 +1315,7 @@ var src_default = {
 	}
 };
 var STYLES = `
+${MESSAGE_STYLES}
 /* Cards mounted before the plugin loaded, including the saved launch page. */
 :is([data-zam-region="app"], [data-zami-launch-region="app"]) [data-event-id] div.mt-2:has(> a.no-underline:is(
   [href="https://matrix.to" i], [href="http://matrix.to" i],
