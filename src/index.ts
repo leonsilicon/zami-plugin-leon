@@ -3,12 +3,15 @@ import {
   installChatPresentation,
   isMatrixPreview,
   issueForLink,
+  issueStatusIcon,
+  issueTitle,
 } from "./chat.ts";
 import { projectIcon } from "./project-icon.ts";
 import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
 import {
   AWAITING,
   channelName,
+  issueChannel,
   PROJECT_VISIBILITY_CHANNEL,
   projectDay,
   projectDayEnd,
@@ -86,6 +89,13 @@ function button(className: string, label: string, action: () => void) {
   node.type = "button";
   node.addEventListener("click", action);
   return node;
+}
+
+function issuePriorityIcon(priority: number | null) {
+  const icon = element("span", "leon-issue-priority", priority === 1 ? "!" : undefined);
+  icon.dataset.priority = priority === null ? "unknown" : String(priority);
+  if (priority !== 1) icon.append(element("span", ""), element("span", ""), element("span", ""));
+  return icon;
 }
 
 function makeSwitcher(currentMode: () => Mode, setMode: (mode: Mode) => void) {
@@ -305,7 +315,7 @@ function install(
   let lastRail: string | undefined;
   let lastLists: string | undefined;
   let lastHomeTasks: string | undefined;
-  let lastProjectHeading: string | undefined;
+  let lastChatHeading: string | undefined;
 
   const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
     if (homeProfile && homeProfile.userId === auth.userId)
@@ -359,7 +369,7 @@ function install(
   const placeholder = element("section", "leon-placeholder");
   const fallbackHeader = element("div", "leon-placeholder-header");
   fallbackHeader.append(element("h2", "", "Home"));
-  const projectHeading = element("h2", "leon-chat-project");
+  const chatHeading = element("h2", "leon-chat-heading");
   const status = element("p", "leon-status");
   status.setAttribute("role", "status");
   placeholder.append(fallbackHeader, status);
@@ -623,16 +633,13 @@ function install(
       item.classList.add("leon-issue");
       item.title = title;
       item.setAttribute("aria-label", `${title}, ${priorityLabel}, ${statusName}`);
-      const priorityIcon = element("span", "leon-issue-priority", priority === 1 ? "!" : undefined);
-      priorityIcon.dataset.priority = priority === null ? "unknown" : String(priority);
+      const priorityIcon = issuePriorityIcon(priority);
       priorityIcon.setAttribute("aria-hidden", "true");
-      if (priority !== 1)
-        priorityIcon.append(element("span", ""), element("span", ""), element("span", ""));
-      const circle = element("span", "leon-issue-status");
-      circle.dataset.status = statusType;
-      circle.setAttribute("aria-hidden", "true");
-      if (statusColor) circle.style.color = statusColor;
-      item.append(priorityIcon, circle, element("span", "leon-issue-title", title));
+      item.append(
+        priorityIcon,
+        issueStatusIcon(statusType, statusColor),
+        element("span", "leon-issue-title", title),
+      );
     } else {
       item.textContent = `#${row.name}`;
     }
@@ -703,22 +710,47 @@ function install(
     lastHomeTasks = signature;
   }
 
-  function renderProjectHeader(chat: Channel | undefined, atHome: boolean) {
-    const title = atHome ? "Home" : chat?.project ? projectTitle(chat) : undefined;
+  function renderChatHeader(chat: Channel | undefined, atHome: boolean) {
+    const task = !atHome && chat ? issueChannel(chat.name) : undefined;
+    const identifier = task?.identifier.toUpperCase();
+    const details = task ? chat?.issue : undefined;
+    const roomTitle = atHome ? "Home" : chat?.project ? projectTitle(chat) : undefined;
+    const title = task ? issueTitle(details, task.slug) || identifier : roomTitle;
     if (!header || !title) {
-      projectHeading.remove();
+      chatHeading.remove();
       return;
     }
 
     const appearance = atHome ? undefined : chat?.project;
-    const signature = JSON.stringify([title, appearance]);
-    if (signature !== lastProjectHeading) {
-      projectHeading.title = title;
-      projectHeading.replaceChildren(element("span", "leon-chat-project-title", title));
-      if (appearance) projectHeading.prepend(projectIcon(appearance, emojiForShortcode));
-      lastProjectHeading = signature;
+    const signature = JSON.stringify([title, appearance, identifier, details]);
+    if (signature !== lastChatHeading) {
+      chatHeading.title = title;
+      chatHeading.toggleAttribute("data-leon-issue", Boolean(identifier));
+      chatHeading.replaceChildren(element("span", "leon-issue-title", title));
+      if (identifier) {
+        const priority = details?.priority ?? null;
+        const priorityIcon = issuePriorityIcon(priority);
+        priorityIcon.title = PRIORITIES[priority ?? -1] ?? "Priority unavailable";
+        priorityIcon.setAttribute("role", "img");
+        priorityIcon.setAttribute("aria-label", priorityIcon.title);
+
+        const statusName = details?.statusName ?? "Status unavailable";
+        const status = element("span", "leon-issue-title", statusName);
+        status.title = statusName;
+        const metadata = element("span", "leon-chat-issue-meta");
+        metadata.append(
+          element("span", "leon-chat-issue-id", identifier),
+          priorityIcon,
+          issueStatusIcon(details?.statusType, details?.statusColor),
+          status,
+        );
+        chatHeading.prepend(metadata);
+      } else if (appearance) {
+        chatHeading.prepend(projectIcon(appearance, emojiForShortcode));
+      }
+      lastChatHeading = signature;
     }
-    if (projectHeading.previousElementSibling !== menu) menu.after(projectHeading);
+    if (chatHeading.previousElementSibling !== menu) menu.after(chatHeading);
   }
 
   function bindApp() {
@@ -751,7 +783,7 @@ function install(
     more.remove();
     moreOptions.remove();
     menu.remove();
-    projectHeading.remove();
+    chatHeading.remove();
     switcher.attach(null);
   }
 
@@ -856,7 +888,7 @@ function install(
       more.remove();
       moreOptions.remove();
     }
-    renderProjectHeader(hasChat ? chat : undefined, atHome && hasChat);
+    renderChatHeader(hasChat ? chat : undefined, atHome && hasChat);
     if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
     app.toggleAttribute("data-leon-ready", hasChat);
     app.toggleAttribute("data-leon-home", atHome);
@@ -1130,20 +1162,6 @@ const STYLES = `
   margin-inline-end: .35em;
   vertical-align: -.08em;
 }
-.leon-inline-issue-id > [data-status="unknown"] { color: var(--zam-text-muted); }
-.leon-inline-issue-id > [data-status="completed"]::after,
-.leon-inline-issue-id > :is([data-status="canceled"], [data-status="duplicate"])::after {
-  content: "";
-  position: absolute;
-  inset: 38% 20% auto;
-  border-bottom: 1px solid currentColor;
-}
-.leon-inline-issue-id > [data-status="completed"]::after {
-  height: 35%;
-  inset-block-start: 23%;
-  border-inline-start: 1px solid currentColor;
-  transform: rotate(-45deg);
-}
 .leon-inline-issue-status-label {
   position: absolute;
   width: 1px;
@@ -1268,15 +1286,22 @@ const STYLES = `
   min-inline-size: 0;
   overflow-wrap: anywhere;
 }
-[data-zam-region="room-header"]:has(> .leon-chat-project) > :is(
-  h2:not(.leon-chat-project),
-  :is(span, svg):has(+ h2:not(.leon-chat-project)),
+[data-leon-mounted][data-leon-ready] [data-zam-region="room-header"] > :is(
   span:has(> .lucide-lock),
   button:has(> :is(.lucide-phone, .lucide-maximize-2))
+),
+[data-zam-region="room-header"]:has(> .leon-chat-heading) > :is(
+  h2:not(.leon-chat-heading),
+  :is(span, svg):has(+ h2:not(.leon-chat-heading))
+),
+[data-zam-region="room-header"]:has(> .leon-chat-heading[data-leon-issue]) > :is(
+  div.w-px.bg-zam-divider,
+  div.w-px.bg-zam-divider + :is(p, button),
+  div.flex-1
 ) {
   display: none !important;
 }
-.leon-chat-project {
+.leon-chat-heading {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1284,24 +1309,60 @@ const STYLES = `
   color: var(--zam-text-primary);
   font-weight: 650;
 }
-.leon-chat-project .leon-project-icon {
+.leon-chat-heading .leon-project-icon {
   inline-size: 20px;
   block-size: 20px;
   font-size: 18px;
   line-height: 20px;
 }
-.leon-chat-project-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
+[data-zam-region="room-header"]:has(> .leon-chat-heading[data-leon-issue]) {
+  height: auto;
+  min-height: 3rem;
+  padding-block: 6px;
+}
+.leon-chat-heading[data-leon-issue] {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  font-size: 14px;
+  line-height: 18px;
+}
+.leon-chat-heading[data-leon-issue] > .leon-issue-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.leon-chat-issue-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--zam-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+}
+.leon-chat-issue-id {
+  flex: none;
+  font-weight: 650;
   white-space: nowrap;
 }
+@media (max-width: 360px) {
+  [data-zam-region="room-header"]:has(> .leon-chat-heading[data-leon-issue]) {
+    padding-inline: 10px;
+    column-gap: 8px;
+  }
+  .leon-chat-issue-meta { gap: 5px; }
+}
 [data-leon-home] [data-zam-region="room-header"] > :not(
-  .leon-menu, .leon-chat-project, .leon-home-more, .leon-home-more-options,
+  .leon-menu, .leon-chat-heading, .leon-home-more, .leon-home-more-options,
   button[aria-haspopup="menu"][aria-expanded]
 ) {
   display: none !important;
 }
-[data-leon-home] .leon-chat-project { flex: 1; }
+[data-leon-home] .leon-chat-heading { flex: 1; }
 [data-leon-home] [data-zam-region="timeline"]:not(.leon-home),
 [data-leon-home] [data-zam-region="timeline"]:not(.leon-home) ~ .absolute {
   display: none !important;
@@ -1447,12 +1508,25 @@ const STYLES = `
   color: #e8b510;
 }
 .leon-issue-status[data-status="backlog"] { border-style: dashed; }
+.leon-issue-status[data-status="unknown"] { color: var(--zam-text-muted); }
 .leon-issue-status[data-status="started"]::after {
   content: "";
   position: absolute;
   inset: 1.5px;
   border-radius: 50%;
   background: conic-gradient(currentColor 50%, transparent 0);
+}
+.leon-issue-status:is([data-status="completed"], [data-status="canceled"], [data-status="duplicate"])::after {
+  content: "";
+  position: absolute;
+  inset: 38% 20% auto;
+  border-bottom: 1px solid currentColor;
+}
+.leon-issue-status[data-status="completed"]::after {
+  height: 35%;
+  inset-block-start: 23%;
+  border-inline-start: 1px solid currentColor;
+  transform: rotate(-45deg);
 }
 .leon-issue-title {
   min-width: 0;

@@ -3,6 +3,14 @@ import type { MatrixLink } from "./zami.ts";
 
 type IssueLinks = Pick<ReturnType<typeof workspace>, "channels" | "slackIssues">;
 
+export function issueTitle(issue: Channel["issue"], slug: string | undefined) {
+  const words = slug?.replace(/[-_]+/g, " ").trim();
+  return (
+    issue?.title.replace(/\s+`\{[^`]*\}`$/, "") ||
+    (words ? words.charAt(0).toUpperCase() + words.slice(1) : "")
+  );
+}
+
 function webUrl(href: string) {
   if (!/^https?:\/\//i.test(href)) return;
   try {
@@ -50,12 +58,9 @@ export function issueForLink(
 
   const issue = issueChannel(channel?.name ?? label);
   if (!issue) return;
-  const words = issue.slug?.replace(/[-_]+/g, " ").trim();
   return {
     identifier: issue.identifier.toUpperCase(),
-    title:
-      channel?.issue?.title.replace(/\s+`\{[^`]*\}`$/, "") ||
-      (words ? words[0]?.toUpperCase() + words.slice(1) : ""),
+    title: issueTitle(channel?.issue, issue.slug),
     status: channel?.issue?.statusName,
     statusType: channel?.issue?.statusType,
     statusColor: channel?.issue?.statusColor,
@@ -81,18 +86,22 @@ const LINK = '[data-zam-region="app"] .message-body a[href]';
 const EDITOR = '[data-zam-region="composer"] [role="textbox"][placeholder]';
 const EDITOR_ATTRIBUTES = ["placeholder", "aria-label"] as const;
 
+export function issueStatusIcon(statusType = "unknown", statusColor?: string | null) {
+  const icon = document.createElement("span");
+  icon.className = "leon-issue-status";
+  icon.dataset.status = statusType;
+  icon.setAttribute("aria-hidden", "true");
+  if (statusColor) icon.style.color = statusColor;
+  return icon;
+}
+
 function issueChip(issue: NonNullable<ReturnType<typeof issueForLink>>) {
   const chip = document.createElement("span");
   chip.className = "leon-inline-issue";
 
   const id = document.createElement("span");
   id.className = "leon-inline-issue-id";
-  const icon = document.createElement("span");
-  icon.className = "leon-issue-status";
-  icon.dataset.status = issue.statusType ?? "unknown";
-  icon.setAttribute("aria-hidden", "true");
-  if (issue.statusColor) icon.style.color = issue.statusColor;
-  id.append(icon, issue.identifier);
+  id.append(issueStatusIcon(issue.statusType, issue.statusColor), issue.identifier);
   chip.append(id);
   if (issue.title) chip.append(` ${issue.title}`);
   if (issue.status) {
