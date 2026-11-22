@@ -580,7 +580,7 @@ function makeSwitcher(currentMode, setMode) {
 		}
 	};
 }
-function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcToHttp, notifications, t, parseMatrixLink, emojiForShortcode }) {
+function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messageModule, mxcToHttp, notifications, t, parseMatrixLink, emojiForShortcode }) {
 	const state = rooms.roomsState;
 	let mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
 	let day = projectDay();
@@ -593,6 +593,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 	let client;
 	let homeProfile;
 	let followToday = true;
+	let homeVisit = 0;
 	let previousRoom = null;
 	let selectedProject = null;
 	let projectsExpanded = zam.storage.get("projectsExpanded") === true;
@@ -708,6 +709,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 		if (mode === "leon" && sidebarNeedsHistory()) closeSidebar?.();
 		previousRoom = state.activeRoomId;
 		followToday = true;
+		homeVisit++;
 		selectedProject = null;
 		collapsed = false;
 	}
@@ -729,6 +731,26 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 		openRoom(channel.id);
 		render();
 	}
+	function projectOpenInHome(roomId) {
+		const project = data.today;
+		if (project?.id === roomId && state.activeRoomId === roomId && !state.showInbox && !state.showSpaceHome && !state.draftDm && mode === "leon" && followToday && composer?.isConnected && !stopped) return project;
+	}
+	const homeSend = messageModule && typeof messageModule.sendEventContent === "function" ? zami.patch.after(messageModule, "sendEventContent", (sent, [roomId, content]) => {
+		if (!projectOpenInHome(roomId) || content.msgtype !== "m.text") return;
+		const relation = content["m.relates_to"];
+		if (relation?.rel_type === "m.thread" || relation?.rel_type === "m.replace") return;
+		const visit = homeVisit;
+		const sendingAccount = auth.userId;
+		const sendingClient = zam.unsafe.getClient();
+		sent.then(() => {
+			if (homeVisit !== visit || auth.userId !== sendingAccount || zam.unsafe.getClient() !== sendingClient) return;
+			const project = projectOpenInHome(roomId);
+			if (!project) return;
+			const history = timeline;
+			choose(project, true);
+			if (history?.isConnected) history.scrollTop = history.scrollHeight;
+		}, () => {}).catch((error) => console.error("[leon] Failed to open today's chat after send", error));
+	}) : void 0;
 	function registerHome() {
 		const home = zami.app.home;
 		if (!home) return;
@@ -1137,6 +1159,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, mxcTo
 		viewWatch.dispose();
 		accountAvatar.dispose();
 		messageAvatar.dispose();
+		homeSend?.dispose();
 		preview?.dispose();
 		chatPresentation.dispose();
 		if (homeProfile) state.roomsTick++;
@@ -1150,11 +1173,12 @@ var src_default = {
 	async onload(zam) {
 		const zami = zam.zami;
 		if (!zami) throw new Error("Leon requires the Zami plugin API.");
-		const [rooms, { interfaceState: ui, closeSidebar }, { auth }, clientModule, media, notifications, { t }, matrixLinks, emoji] = await Promise.all([
+		const [rooms, { interfaceState: ui, closeSidebar }, { auth }, clientModule, messageModule, media, notifications, { t }, matrixLinks, emoji] = await Promise.all([
 			zami.import("$lib/stores/rooms.svelte"),
 			zami.import("$lib/stores/interface.svelte"),
 			zami.import("$lib/stores/auth.svelte"),
 			zami.import("$lib/matrix/client"),
+			zami.import("$lib/matrix/pluginHost").catch(() => void 0),
 			zami.import("$lib/matrix/media").catch(() => void 0),
 			zami.import("$lib/stores/notifications.svelte"),
 			zami.import("$lib/i18n/index"),
@@ -1167,6 +1191,7 @@ var src_default = {
 			closeSidebar,
 			auth,
 			clientModule,
+			messageModule,
 			mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
 			notifications,
 			t,

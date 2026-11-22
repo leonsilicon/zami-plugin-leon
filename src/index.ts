@@ -28,6 +28,7 @@ interface WorkspaceModules {
   closeSidebar: HostModules["$lib/stores/interface.svelte"]["closeSidebar"];
   auth: HostModules["$lib/stores/auth.svelte"]["auth"];
   clientModule: ClientModule;
+  messageModule?: HostModules["$lib/matrix/pluginHost"];
   mxcToHttp: HostModules["$lib/matrix/media"]["mxcToHttp"];
   notifications: HostModules["$lib/stores/notifications.svelte"];
   t: HostModules["$lib/i18n/index"]["t"];
@@ -259,6 +260,7 @@ function install(
     closeSidebar,
     auth,
     clientModule,
+    messageModule,
     mxcToHttp,
     notifications,
     t,
@@ -281,6 +283,7 @@ function install(
   let client: MatrixClient | null | undefined;
   let homeProfile: { userId: string; roomId: string | null; avatarUrl: string | null } | undefined;
   let followToday = true;
+  let homeVisit = 0;
   let previousRoom: string | null = null;
   let selectedProject: string | null = null;
   let projectsExpanded = zam.storage.get("projectsExpanded") === true;
@@ -440,6 +443,7 @@ function install(
     if (mode === "leon" && sidebarNeedsHistory()) closeSidebar?.();
     previousRoom = state.activeRoomId;
     followToday = true;
+    homeVisit++;
     selectedProject = null;
     collapsed = false;
   }
@@ -473,6 +477,56 @@ function install(
     openRoom(channel.id);
     render();
   }
+
+  function projectOpenInHome(roomId: string) {
+    const project = data.today;
+    if (
+      project?.id === roomId &&
+      state.activeRoomId === roomId &&
+      !state.showInbox &&
+      !state.showSpaceHome &&
+      !state.draftDm &&
+      mode === "leon" &&
+      followToday &&
+      composer?.isConnected &&
+      !stopped
+    ) {
+      return project;
+    }
+  }
+
+  const homeSend =
+    messageModule && typeof messageModule.sendEventContent === "function"
+      ? zami.patch.after(messageModule, "sendEventContent", (sent, [roomId, content]) => {
+          if (!projectOpenInHome(roomId) || content.msgtype !== "m.text") return;
+          const relation = content["m.relates_to"] as { rel_type?: unknown } | undefined;
+          if (relation?.rel_type === "m.thread" || relation?.rel_type === "m.replace") return;
+          const visit = homeVisit;
+          const sendingAccount = auth.userId;
+          const sendingClient = zam.unsafe.getClient();
+          void sent
+            .then(
+              () => {
+                if (
+                  homeVisit !== visit ||
+                  auth.userId !== sendingAccount ||
+                  zam.unsafe.getClient() !== sendingClient
+                )
+                  return;
+                const project = projectOpenInHome(roomId);
+                if (!project) return;
+                const history = timeline;
+                choose(project, true);
+                // The composer tried to scroll while Home still hid the timeline.
+                if (history?.isConnected) history.scrollTop = history.scrollHeight;
+              },
+              () => {},
+            )
+            .catch((error) =>
+              console.error("[leon] Failed to open today's chat after send", error),
+            );
+        })
+      : undefined;
 
   // Zami opens on today's project: it shows the room as it last looked the moment the app
   // opens, and lands in it. The registration ends with the day, so tomorrow's first launch
@@ -984,6 +1038,7 @@ function install(
     viewWatch.dispose();
     accountAvatar.dispose();
     messageAvatar.dispose();
+    homeSend?.dispose();
     preview?.dispose();
     chatPresentation.dispose();
     if (homeProfile) state.roomsTick++;
@@ -1003,6 +1058,7 @@ export default {
       { interfaceState: ui, closeSidebar },
       { auth },
       clientModule,
+      messageModule,
       media,
       notifications,
       { t },
@@ -1013,6 +1069,7 @@ export default {
       zami.import("$lib/stores/interface.svelte"),
       zami.import("$lib/stores/auth.svelte"),
       zami.import("$lib/matrix/client"),
+      zami.import("$lib/matrix/pluginHost").catch(() => undefined),
       zami.import("$lib/matrix/media").catch(() => undefined),
       zami.import("$lib/stores/notifications.svelte"),
       zami.import("$lib/i18n/index"),
@@ -1025,6 +1082,7 @@ export default {
       closeSidebar,
       auth,
       clientModule,
+      messageModule,
       mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
       notifications,
       t,

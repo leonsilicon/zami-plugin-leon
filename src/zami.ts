@@ -81,6 +81,9 @@ export interface HostModules {
   "$lib/matrix/media": {
     mxcToHttp?(this: void, mxc: string): string | null;
   };
+  "$lib/matrix/pluginHost": {
+    sendEventContent(roomId: string, content: Record<string, unknown>): Promise<string>;
+  };
   "$lib/i18n/index": {
     t(
       this: void,
@@ -102,6 +105,7 @@ export interface HostModules {
 
 type ClientModule = HostModules["$lib/matrix/client"];
 type AvatarFunction = "getOwnAvatarUrl" | "getMemberAvatar";
+type MessageModule = HostModules["$lib/matrix/pluginHost"];
 
 export interface ZamiApi {
   import<Key extends keyof HostModules>(id: Key): Promise<HostModules[Key]>;
@@ -122,6 +126,11 @@ export interface ZamiApi {
         result: string | null,
         args: Parameters<ClientModule[Key]>,
       ) => string | null | undefined,
+    ): Disposable;
+    after(
+      target: MessageModule,
+      method: "sendEventContent",
+      hook: (result: Promise<string>, args: Parameters<MessageModule["sendEventContent"]>) => void,
     ): Disposable;
     instead(
       target: ClientModule,
