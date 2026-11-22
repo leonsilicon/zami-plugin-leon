@@ -1,7 +1,14 @@
+import {
+  composerPlaceholder,
+  installChatPresentation,
+  isMatrixPreview,
+  issueForLink,
+} from "./chat.ts";
 import { projectIcon } from "./project-icon.ts";
 import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
 import {
   AWAITING,
+  channelName,
   PROJECT_VISIBILITY_CHANNEL,
   projectDay,
   projectDayEnd,
@@ -23,6 +30,7 @@ interface WorkspaceModules {
   mxcToHttp: HostModules["$lib/matrix/media"]["mxcToHttp"];
   notifications: HostModules["$lib/stores/notifications.svelte"];
   t: HostModules["$lib/i18n/index"]["t"];
+  parseMatrixLink?: HostModules["$lib/utils/matrixLinks"]["parseMatrixLink"];
   emojiForShortcode?: HostModules["$lib/data/emojiShortcodes"]["emojiForShortcode"];
 }
 
@@ -250,6 +258,7 @@ function install(
     mxcToHttp,
     notifications,
     t,
+    parseMatrixLink,
     emojiForShortcode,
   }: WorkspaceModules,
 ) {
@@ -299,6 +308,26 @@ function install(
     )
       return homeProfile.avatarUrl ?? undefined;
   });
+
+  const resolveIssue = (url: string, label: string) =>
+    issueForLink(
+      url,
+      label,
+      data,
+      (href) => parseMatrixLink?.(href),
+      (id) => Boolean(clientModule.getRoom(id)),
+    );
+  const preview =
+    typeof clientModule.getUrlPreview === "function"
+      ? zami.patch.instead(clientModule, "getUrlPreview", ([url], original) =>
+          isMatrixPreview(url) || resolveIssue(url, "") ? Promise.resolve(null) : original(url),
+        )
+      : undefined;
+  const roomNameToken = "LEON_ROOM_NAME";
+  const chatPresentation = installChatPresentation(
+    resolveIssue,
+    composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken),
+  );
 
   const rail = element("nav", "leon-rail");
   rail.setAttribute("aria-label", "Linear projects");
@@ -715,29 +744,27 @@ function install(
       resetLanding();
       refresh = true;
     }
-    if (mode === "leon") {
-      if (refresh) {
-        const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
-        visibilityRooms.clear();
-        for (const room of bridgedRooms) {
-          if (room.name.trim().replace(/^#/, "").toLowerCase() !== PROJECT_VISIBILITY_CHANNEL)
-            continue;
-          visibilityRooms.add(room.roomId);
-          const snapshot = readProjectVisibility(room, (id) => zam.matrix.getRecentMessages(id));
-          if (
-            snapshot &&
-            snapshot.timestamp >= (projectVisibility.get(snapshot.team)?.timestamp ?? 0)
-          )
-            projectVisibility.set(snapshot.team, snapshot);
-        }
-        data = workspace(bridgedRooms, day, projectVisibility);
-        if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) {
-          selectedProject = null;
-        }
-        refresh = false;
+    if (refresh) {
+      const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
+      visibilityRooms.clear();
+      for (const room of bridgedRooms) {
+        if (channelName(room.name) !== PROJECT_VISIBILITY_CHANNEL) continue;
+        visibilityRooms.add(room.roomId);
+        const snapshot = readProjectVisibility(room, (id) => zam.matrix.getRecentMessages(id));
+        if (
+          snapshot &&
+          snapshot.timestamp >= (projectVisibility.get(snapshot.team)?.timestamp ?? 0)
+        )
+          projectVisibility.set(snapshot.team, snapshot);
       }
-      updateNavigation();
+      data = workspace(bridgedRooms, day, projectVisibility);
+      chatPresentation.refreshIssues();
+      if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) {
+        selectedProject = null;
+      }
+      refresh = false;
     }
+    if (mode === "leon") updateNavigation();
     registerHome();
     render();
   }
@@ -817,6 +844,8 @@ function install(
     viewWatch.dispose();
     accountAvatar.dispose();
     messageAvatar.dispose();
+    preview?.dispose();
+    chatPresentation.dispose();
     if (homeProfile) state.roomsTick++;
     resetApp();
     switcher.dispose();
@@ -837,6 +866,7 @@ export default {
       media,
       notifications,
       { t },
+      matrixLinks,
       emoji,
     ] = await Promise.all([
       zami.import("$lib/stores/rooms.svelte"),
@@ -846,6 +876,7 @@ export default {
       zami.import("$lib/matrix/media").catch(() => undefined),
       zami.import("$lib/stores/notifications.svelte"),
       zami.import("$lib/i18n/index"),
+      zami.import("$lib/utils/matrixLinks").catch(() => undefined),
       zami.import("$lib/data/emojiShortcodes").catch(() => undefined),
     ]);
     dispose = install(zam, zami, {
@@ -856,6 +887,7 @@ export default {
       mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
       notifications,
       t,
+      parseMatrixLink: matrixLinks?.parseMatrixLink,
       emojiForShortcode: emoji?.emojiForShortcode,
     });
     zami.app.loadEarly();
@@ -867,6 +899,61 @@ export default {
 };
 
 const STYLES = `
+/* Cards mounted before the plugin loaded, including the saved launch page. */
+:is([data-zam-region="app"], [data-zami-launch-region="app"]) [data-event-id] div.mt-2:has(> a.no-underline:is(
+  [href="https://matrix.to" i], [href="http://matrix.to" i],
+  [href^="https://matrix.to/" i], [href^="http://matrix.to/" i]
+) > div.bg-zam-accent) {
+  display: none;
+}
+.leon-inline-issue {
+  padding: .14em .4em;
+  border-radius: 4px;
+  background: var(--zam-bg-tertiary);
+  color: var(--zam-text-primary);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.message-body a:has(> .leon-inline-issue) { text-decoration: none; }
+.message-body a:is(:hover, :focus-visible) > .leon-inline-issue {
+  background: var(--zam-bg-selected);
+}
+.leon-inline-issue-id {
+  white-space: nowrap;
+  color: var(--zam-text-secondary);
+  font-size: .9em;
+  font-weight: 650;
+}
+.leon-inline-issue-id > .leon-issue-status {
+  display: inline-block;
+  width: .95em;
+  height: .95em;
+  margin-inline-end: .35em;
+  vertical-align: -.08em;
+}
+.leon-inline-issue-id > [data-status="unknown"] { color: var(--zam-text-muted); }
+.leon-inline-issue-id > [data-status="completed"]::after,
+.leon-inline-issue-id > :is([data-status="canceled"], [data-status="duplicate"])::after {
+  content: "";
+  position: absolute;
+  inset: 38% 20% auto;
+  border-bottom: 1px solid currentColor;
+}
+.leon-inline-issue-id > [data-status="completed"]::after {
+  height: 35%;
+  inset-block-start: 23%;
+  border-inline-start: 1px solid currentColor;
+  transform: rotate(-45deg);
+}
+.leon-inline-issue-status-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 [data-leon-mounted] :is([data-zam-region="space-sidebar"], [data-zam-region="room-list"], [data-leon-hidden]),
 [data-leon-mounted][data-leon-collapsed] > [data-leon-sidebar],
 [data-leon-mounted]:not([data-leon-ready]) > main > :not(.leon-placeholder) {

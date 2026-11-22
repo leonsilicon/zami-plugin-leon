@@ -1,50 +1,8 @@
 // Generated from src/index.ts by vp build.
-// src/project-icon.ts
-var SVG_NS = "http://www.w3.org/2000/svg";
-var CUBE = "M12 3 3.5 7.75v8.5L12 21l8.5-4.75v-8.5L12 3Z M3.5 7.75 12 12.5l8.5-4.75 M12 12.5V21";
-var ICON_PATHS = {
-	book: "M4 5c3-1.5 5.5-1 8 1v14c-2.5-2-5-2.5-8-1V5Zm16 0c-3-1.5-5.5-1-8 1v14c2.5-2 5-2.5 8-1V5Z",
-	briefcase: "M3 8h18v12H3z M8 8V4h8v4 M3 13h18 M10 13v2h4v-2",
-	calendar: "M4 6h16v14H4z M8 4v4 M16 4v4 M4 10h16 M8 14h2 M14 14h2",
-	code: "m8 7-5 5 5 5m8-10 5 5-5 5m-2-13-4 16",
-	flag: "M5 21V4m0 1c5-4 9 4 14 0v9c-5 4-9-4-14 0",
-	globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c-4 3.5-4 14.5 0 18 4-3.5 4-14.5 0-18ZM3 12h18",
-	home: "m3 10 9-7 9 7 M5 9v12h14V9 M9 21v-7h6v7",
-	rocket: "M9 16c-1-1-2-2-3-2 1-3 2-5 5-7 4-3 8-3 9-3 0 1 0 5-3 9-2 3-4 4-7 5 0-1-1-2-1-2Zm0-6H5l-2 4 3 1m8 0v4l-4 2-1-3m6-8h.01M7 18l-3 2 1-3",
-	star: "m12 3 2.75 5.5 6.25.9-4.5 4.35 1.05 6.15L12 17l-5.55 2.9 1.05-6.15L3 9.4l6.25-.9L12 3Z",
-	target: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 5h.01"
-};
-function projectIcon(appearance, emojiForShortcode) {
-	const icon = appearance?.icon ?? "";
-	const shortcode = /^:([\w+-]+):$/.exec(icon)?.[1];
-	const emoji = shortcode ? emojiForShortcode?.(shortcode) : /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(icon) ? icon : void 0;
-	if (emoji) {
-		const element = document.createElement("span");
-		element.className = "leon-project-icon";
-		element.setAttribute("aria-hidden", "true");
-		element.textContent = emoji;
-		return element;
-	}
-	const svg = document.createElementNS(SVG_NS, "svg");
-	svg.classList.add("leon-project-icon");
-	svg.setAttribute("aria-hidden", "true");
-	svg.setAttribute("viewBox", "0 0 24 24");
-	svg.setAttribute("fill", "none");
-	svg.setAttribute("stroke", "currentColor");
-	svg.setAttribute("stroke-width", "2");
-	svg.setAttribute("stroke-linecap", "round");
-	svg.setAttribute("stroke-linejoin", "round");
-	if (appearance?.color) svg.style.color = appearance.color;
-	const shape = icon.replace(/^icon[-_]?/i, "").toLowerCase();
-	const path = document.createElementNS(SVG_NS, "path");
-	path.setAttribute("d", Object.hasOwn(ICON_PATHS, shape) ? ICON_PATHS[shape] : CUBE);
-	svg.append(path);
-	return svg;
-}
 // src/workspace.ts
 var AWAITING = "Awaiting Leon";
 var PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
-var TASK = /^(leon-\d+)(?:-[a-z0-9_-]+)?$/;
+var TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
 var TOPIC_SEPARATOR = " · ";
 var LINEAR_WORKFLOW = /^linear:v1 ([a-z_]+) (#[\da-f]{6}|-)(?: p([0-4]))?(?: |$)/i;
 var LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
@@ -105,7 +63,14 @@ function datedProject(name) {
 	};
 }
 function channelName(name) {
-	return typeof name === "string" ? name.trim().replace(/^#/, "").toLowerCase() : "";
+	return typeof name === "string" ? name.trim().replace(/^#+/, "").toLowerCase() : "";
+}
+function issueChannel(name) {
+	const [, identifier, slug] = TASK.exec(channelName(name)) ?? [];
+	if (identifier) return {
+		identifier,
+		slug
+	};
 }
 function isSlackProtocol(id) {
 	return typeof id === "string" && ["slack", "slackgo"].includes(id.toLowerCase());
@@ -152,7 +117,7 @@ function readProjectVisibility(room, readMessages) {
 	return null;
 }
 function linearIssue(name, topic) {
-	const identifier = TASK.exec(name)?.[1];
+	const identifier = issueChannel(name)?.identifier;
 	if (!identifier || !topic) return null;
 	const [status, workflow, link, ...titleParts] = topic.split(TOPIC_SEPARATOR);
 	const [, type, color, priority] = workflow?.match(LINEAR_WORKFLOW) ?? [];
@@ -177,6 +142,7 @@ function projectAppearance(topic) {
 }
 function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 	const channels = /* @__PURE__ */ new Map();
+	const slackIssues = /* @__PURE__ */ new Map();
 	const awaiting = [];
 	const projects = [];
 	for (const room of rooms) {
@@ -193,6 +159,17 @@ function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 			...project && { project }
 		};
 		channels.set(channel.id, channel);
+		if (TASK.test(name)) {
+			const address = slackAddress(bridges);
+			if (address) {
+				const matches = slackIssues.get(address.channelId) ?? [];
+				matches.push({
+					team: address.team,
+					channel
+				});
+				slackIssues.set(address.channelId, matches);
+			}
+		}
 		if (project && !room.archived) {
 			const address = slackAddress(bridges);
 			const snapshot = address ? visibility.get(address.team) : void 0;
@@ -213,10 +190,204 @@ function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 	projects.sort((a, b) => sameDay(a.name) - sameDay(b.name) || a.name.localeCompare(b.name));
 	return {
 		channels,
+		slackIssues,
 		awaiting,
 		projects,
 		today: projects.find(({ name }) => Number.isFinite(sameDay(name))) ?? null
 	};
+}
+// src/chat.ts
+function webUrl(href) {
+	if (!/^https?:\/\//i.test(href)) return;
+	try {
+		return new URL(href);
+	} catch {
+		return;
+	}
+}
+function isMatrixPreview(href) {
+	return webUrl(href)?.hostname === "matrix.to";
+}
+function issueForLink(href, label, { channels, slackIssues }, parseMatrixLink, hasRoom) {
+	let channel;
+	const url = webUrl(href);
+	if (url?.hostname === "slack.com" || url?.hostname.endsWith(".slack.com")) {
+		const [, team, clientChannel] = /^\/client\/(T[A-Z0-9]+)\/([CG][A-Z0-9]+)\/?$/.exec(url.pathname) ?? [];
+		const [, webChannel] = /^\/(?:archives|messages)\/([CG][A-Z0-9]+)\/?$/.exec(url.pathname) ?? [];
+		const id = clientChannel ?? webChannel;
+		if (!id) return;
+		const matches = slackIssues.get(id) ?? [];
+		channel = team ? matches.find((match) => match.team === team)?.channel : matches.length === 1 ? matches[0]?.channel : void 0;
+	} else if (url?.hostname === "matrix.to" || href.startsWith("matrix:")) {
+		const target = parseMatrixLink(href);
+		if (!target || target.kind === "user" || target.eventId) return;
+		if (target.kind === "room") {
+			channel = channels.get(target.roomId);
+			if (!channel && hasRoom(target.roomId)) return;
+		}
+	} else return;
+	const issue = issueChannel(channel?.name ?? label);
+	if (!issue) return;
+	const words = issue.slug?.replace(/[-_]+/g, " ").trim();
+	return {
+		identifier: issue.identifier.toUpperCase(),
+		title: channel?.issue?.title.replace(/\s+`\{[^`]*\}`$/, "") || (words ? words[0]?.toUpperCase() + words.slice(1) : ""),
+		status: channel?.issue?.statusName,
+		statusType: channel?.issue?.statusType,
+		statusColor: channel?.issue?.statusColor
+	};
+}
+function composerPlaceholder(template, token) {
+	const [prefix, suffix, extra] = template.split(token);
+	return (value) => {
+		if (!prefix?.endsWith("#") || suffix === void 0 || extra !== void 0 || !value.startsWith(prefix) || !value.endsWith(suffix)) return value;
+		return prefix + value.slice(prefix.length).replace(/^#+/, "");
+	};
+}
+var LINK = "[data-zam-region=\"app\"] .message-body a[href]";
+var EDITOR = "[data-zam-region=\"composer\"] [role=\"textbox\"][placeholder]";
+var EDITOR_ATTRIBUTES = ["placeholder", "aria-label"];
+function issueChip(issue) {
+	const chip = document.createElement("span");
+	chip.className = "leon-inline-issue";
+	const id = document.createElement("span");
+	id.className = "leon-inline-issue-id";
+	const icon = document.createElement("span");
+	icon.className = "leon-issue-status";
+	icon.dataset.status = issue.statusType ?? "unknown";
+	icon.setAttribute("aria-hidden", "true");
+	if (issue.statusColor) icon.style.color = issue.statusColor;
+	id.append(icon, issue.identifier);
+	chip.append(id);
+	if (issue.title) chip.append(` ${issue.title}`);
+	if (issue.status) {
+		const status = document.createElement("span");
+		status.className = "leon-inline-issue-status-label";
+		status.textContent = `, ${issue.status}`;
+		chip.append(status);
+	}
+	return chip;
+}
+function installChatPresentation(resolveIssue, normalizePlaceholder) {
+	const links = /* @__PURE__ */ new WeakMap();
+	const editors = /* @__PURE__ */ new WeakMap();
+	function updateLink(link) {
+		const saved = links.get(link);
+		const decorated = saved && link.childNodes.length === 1 && link.firstChild === saved.chip;
+		const original = decorated ? saved.original : Array.from(link.childNodes);
+		const label = original.map((node) => node.textContent).join("");
+		const issue = resolveIssue(link.getAttribute("href") ?? "", label);
+		if (!issue) {
+			links.delete(link);
+			if (decorated) link.replaceChildren(...original);
+			return;
+		}
+		const key = JSON.stringify(issue);
+		if (decorated && key === saved.key) return;
+		const chip = issueChip(issue);
+		links.set(link, {
+			original,
+			chip,
+			key
+		});
+		link.replaceChildren(chip);
+	}
+	function updateEditor(editor) {
+		const saved = editors.get(editor) ?? /* @__PURE__ */ new Map();
+		for (const name of EDITOR_ATTRIBUTES) {
+			const original = editor.getAttribute(name);
+			if (original === saved.get(name)?.normalized) continue;
+			saved.delete(name);
+			if (original === null) continue;
+			const normalized = normalizePlaceholder(original);
+			if (normalized === original) continue;
+			saved.set(name, {
+				original,
+				normalized
+			});
+			editor.setAttribute(name, normalized);
+		}
+		if (saved.size) editors.set(editor, saved);
+	}
+	function scan(root) {
+		if (root instanceof Element) {
+			if (root.matches(LINK)) updateLink(root);
+			if (root.matches(EDITOR)) updateEditor(root);
+		}
+		root.querySelectorAll(LINK).forEach(updateLink);
+		root.querySelectorAll(EDITOR).forEach(updateEditor);
+	}
+	const observer = new MutationObserver((mutations) => {
+		for (const mutation of mutations) {
+			const { target } = mutation;
+			if (!(target instanceof Element) || !target.isConnected) continue;
+			if (target.matches(EDITOR)) updateEditor(target);
+			if (target.matches(LINK)) updateLink(target);
+			for (const node of mutation.addedNodes) if (node instanceof Element && node.isConnected) scan(node);
+		}
+	});
+	observer.observe(document.body, {
+		childList: true,
+		subtree: true,
+		attributes: true,
+		attributeFilter: ["href", ...EDITOR_ATTRIBUTES]
+	});
+	scan(document);
+	return {
+		refreshIssues: () => document.querySelectorAll(LINK).forEach(updateLink),
+		dispose() {
+			observer.disconnect();
+			document.querySelectorAll(LINK).forEach((link) => {
+				const saved = links.get(link);
+				if (saved && link.childNodes.length === 1 && link.firstChild === saved.chip) link.replaceChildren(...saved.original);
+			});
+			document.querySelectorAll(EDITOR).forEach((editor) => {
+				for (const [name, { original, normalized }] of editors.get(editor) ?? []) if (editor.getAttribute(name) === normalized) editor.setAttribute(name, original);
+			});
+		}
+	};
+}
+// src/project-icon.ts
+var SVG_NS = "http://www.w3.org/2000/svg";
+var CUBE = "M12 3 3.5 7.75v8.5L12 21l8.5-4.75v-8.5L12 3Z M3.5 7.75 12 12.5l8.5-4.75 M12 12.5V21";
+var ICON_PATHS = {
+	book: "M4 5c3-1.5 5.5-1 8 1v14c-2.5-2-5-2.5-8-1V5Zm16 0c-3-1.5-5.5-1-8 1v14c2.5-2 5-2.5 8-1V5Z",
+	briefcase: "M3 8h18v12H3z M8 8V4h8v4 M3 13h18 M10 13v2h4v-2",
+	calendar: "M4 6h16v14H4z M8 4v4 M16 4v4 M4 10h16 M8 14h2 M14 14h2",
+	code: "m8 7-5 5 5 5m8-10 5 5-5 5m-2-13-4 16",
+	flag: "M5 21V4m0 1c5-4 9 4 14 0v9c-5 4-9-4-14 0",
+	globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c-4 3.5-4 14.5 0 18 4-3.5 4-14.5 0-18ZM3 12h18",
+	home: "m3 10 9-7 9 7 M5 9v12h14V9 M9 21v-7h6v7",
+	rocket: "M9 16c-1-1-2-2-3-2 1-3 2-5 5-7 4-3 8-3 9-3 0 1 0 5-3 9-2 3-4 4-7 5 0-1-1-2-1-2Zm0-6H5l-2 4 3 1m8 0v4l-4 2-1-3m6-8h.01M7 18l-3 2 1-3",
+	star: "m12 3 2.75 5.5 6.25.9-4.5 4.35 1.05 6.15L12 17l-5.55 2.9 1.05-6.15L3 9.4l6.25-.9L12 3Z",
+	target: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 5h.01"
+};
+function projectIcon(appearance, emojiForShortcode) {
+	const icon = appearance?.icon ?? "";
+	const shortcode = /^:([\w+-]+):$/.exec(icon)?.[1];
+	const emoji = shortcode ? emojiForShortcode?.(shortcode) : /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(icon) ? icon : void 0;
+	if (emoji) {
+		const element = document.createElement("span");
+		element.className = "leon-project-icon";
+		element.setAttribute("aria-hidden", "true");
+		element.textContent = emoji;
+		return element;
+	}
+	const svg = document.createElementNS(SVG_NS, "svg");
+	svg.classList.add("leon-project-icon");
+	svg.setAttribute("aria-hidden", "true");
+	svg.setAttribute("viewBox", "0 0 24 24");
+	svg.setAttribute("fill", "none");
+	svg.setAttribute("stroke", "currentColor");
+	svg.setAttribute("stroke-width", "2");
+	svg.setAttribute("stroke-linecap", "round");
+	svg.setAttribute("stroke-linejoin", "round");
+	if (appearance?.color) svg.style.color = appearance.color;
+	const shape = icon.replace(/^icon[-_]?/i, "").toLowerCase();
+	const path = document.createElementNS(SVG_NS, "path");
+	path.setAttribute("d", Object.hasOwn(ICON_PATHS, shape) ? ICON_PATHS[shape] : CUBE);
+	svg.append(path);
+	return svg;
 }
 // src/slack-avatar.ts
 var BRIDGE_ACCOUNT_DATA = "com.beeper.bridge_state";
@@ -406,7 +577,7 @@ function makeSwitcher(currentMode, setMode) {
 		}
 	};
 }
-function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifications, t, emojiForShortcode }) {
+function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifications, t, parseMatrixLink, emojiForShortcode }) {
 	const state = rooms.roomsState;
 	let mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
 	let day = projectDay();
@@ -442,6 +613,10 @@ function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifica
 	const messageAvatar = zami.patch.after(clientModule, "getMemberAvatar", (_, [room, userId]) => {
 		if (homeProfile?.roomId === room.roomId && homeProfile.userId === userId && userId === auth.userId) return homeProfile.avatarUrl ?? void 0;
 	});
+	const resolveIssue = (url, label) => issueForLink(url, label, data, (href) => parseMatrixLink?.(href), (id) => Boolean(clientModule.getRoom(id)));
+	const preview = typeof clientModule.getUrlPreview === "function" ? zami.patch.instead(clientModule, "getUrlPreview", ([url], original) => isMatrixPreview(url) || resolveIssue(url, "") ? Promise.resolve(null) : original(url)) : void 0;
+	const roomNameToken = "LEON_ROOM_NAME";
+	const chatPresentation = installChatPresentation(resolveIssue, composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken));
 	const rail = element("nav", "leon-rail");
 	rail.setAttribute("aria-label", "Linear projects");
 	const list = element("section", "leon-list");
@@ -775,22 +950,21 @@ function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifica
 			resetLanding();
 			refresh = true;
 		}
-		if (mode === "leon") {
-			if (refresh) {
-				const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
-				visibilityRooms.clear();
-				for (const room of bridgedRooms) {
-					if (room.name.trim().replace(/^#/, "").toLowerCase() !== "zami-project-visibility") continue;
-					visibilityRooms.add(room.roomId);
-					const snapshot = readProjectVisibility(room, (id) => zam.matrix.getRecentMessages(id));
-					if (snapshot && snapshot.timestamp >= (projectVisibility.get(snapshot.team)?.timestamp ?? 0)) projectVisibility.set(snapshot.team, snapshot);
-				}
-				data = workspace(bridgedRooms, day, projectVisibility);
-				if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) selectedProject = null;
-				refresh = false;
+		if (refresh) {
+			const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
+			visibilityRooms.clear();
+			for (const room of bridgedRooms) {
+				if (channelName(room.name) !== "zami-project-visibility") continue;
+				visibilityRooms.add(room.roomId);
+				const snapshot = readProjectVisibility(room, (id) => zam.matrix.getRecentMessages(id));
+				if (snapshot && snapshot.timestamp >= (projectVisibility.get(snapshot.team)?.timestamp ?? 0)) projectVisibility.set(snapshot.team, snapshot);
 			}
-			updateNavigation();
+			data = workspace(bridgedRooms, day, projectVisibility);
+			chatPresentation.refreshIssues();
+			if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) selectedProject = null;
+			refresh = false;
 		}
+		if (mode === "leon") updateNavigation();
 		registerHome();
 		render();
 	}
@@ -853,6 +1027,8 @@ function install(zam, zami, { rooms, ui, auth, clientModule, mxcToHttp, notifica
 		viewWatch.dispose();
 		accountAvatar.dispose();
 		messageAvatar.dispose();
+		preview?.dispose();
+		chatPresentation.dispose();
 		if (homeProfile) state.roomsTick++;
 		resetApp();
 		switcher.dispose();
@@ -864,7 +1040,7 @@ var src_default = {
 	async onload(zam) {
 		const zami = zam.zami;
 		if (!zami) throw new Error("Leon requires the Zami plugin API.");
-		const [rooms, { interfaceState: ui }, { auth }, clientModule, media, notifications, { t }, emoji] = await Promise.all([
+		const [rooms, { interfaceState: ui }, { auth }, clientModule, media, notifications, { t }, matrixLinks, emoji] = await Promise.all([
 			zami.import("$lib/stores/rooms.svelte"),
 			zami.import("$lib/stores/interface.svelte"),
 			zami.import("$lib/stores/auth.svelte"),
@@ -872,6 +1048,7 @@ var src_default = {
 			zami.import("$lib/matrix/media").catch(() => void 0),
 			zami.import("$lib/stores/notifications.svelte"),
 			zami.import("$lib/i18n/index"),
+			zami.import("$lib/utils/matrixLinks").catch(() => void 0),
 			zami.import("$lib/data/emojiShortcodes").catch(() => void 0)
 		]);
 		dispose = install(zam, zami, {
@@ -882,6 +1059,7 @@ var src_default = {
 			mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
 			notifications,
 			t,
+			parseMatrixLink: matrixLinks?.parseMatrixLink,
 			emojiForShortcode: emoji?.emojiForShortcode
 		});
 		zami.app.loadEarly();
@@ -892,6 +1070,61 @@ var src_default = {
 	}
 };
 var STYLES = `
+/* Cards mounted before the plugin loaded, including the saved launch page. */
+:is([data-zam-region="app"], [data-zami-launch-region="app"]) [data-event-id] div.mt-2:has(> a.no-underline:is(
+  [href="https://matrix.to" i], [href="http://matrix.to" i],
+  [href^="https://matrix.to/" i], [href^="http://matrix.to/" i]
+) > div.bg-zam-accent) {
+  display: none;
+}
+.leon-inline-issue {
+  padding: .14em .4em;
+  border-radius: 4px;
+  background: var(--zam-bg-tertiary);
+  color: var(--zam-text-primary);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.message-body a:has(> .leon-inline-issue) { text-decoration: none; }
+.message-body a:is(:hover, :focus-visible) > .leon-inline-issue {
+  background: var(--zam-bg-selected);
+}
+.leon-inline-issue-id {
+  white-space: nowrap;
+  color: var(--zam-text-secondary);
+  font-size: .9em;
+  font-weight: 650;
+}
+.leon-inline-issue-id > .leon-issue-status {
+  display: inline-block;
+  width: .95em;
+  height: .95em;
+  margin-inline-end: .35em;
+  vertical-align: -.08em;
+}
+.leon-inline-issue-id > [data-status="unknown"] { color: var(--zam-text-muted); }
+.leon-inline-issue-id > [data-status="completed"]::after,
+.leon-inline-issue-id > :is([data-status="canceled"], [data-status="duplicate"])::after {
+  content: "";
+  position: absolute;
+  inset: 38% 20% auto;
+  border-bottom: 1px solid currentColor;
+}
+.leon-inline-issue-id > [data-status="completed"]::after {
+  height: 35%;
+  inset-block-start: 23%;
+  border-inline-start: 1px solid currentColor;
+  transform: rotate(-45deg);
+}
+.leon-inline-issue-status-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 [data-leon-mounted] :is([data-zam-region="space-sidebar"], [data-zam-region="room-list"], [data-leon-hidden]),
 [data-leon-mounted][data-leon-collapsed] > [data-leon-sidebar],
 [data-leon-mounted]:not([data-leon-ready]) > main > :not(.leon-placeholder) {

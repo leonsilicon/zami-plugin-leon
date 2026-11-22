@@ -10,6 +10,11 @@ interface Room {
   isSpaceRoom(): boolean;
 }
 
+export type MatrixLink =
+  | { kind: "room"; roomId: string; eventId?: string }
+  | { kind: "alias"; alias: string; eventId?: string }
+  | { kind: "user" };
+
 export interface MatrixEvent {
   getType(): string;
   getRoomId(): string | undefined;
@@ -67,13 +72,21 @@ export interface HostModules {
     roomHasThreadUnread(room: Room): boolean;
     getOwnAvatarUrl(): string | null;
     getMemberAvatar(room: Room, userId: string): string | null;
+    getUrlPreview?(url: string): Promise<unknown>;
     mxcToHttp?(this: void, mxc: string): string | null;
   };
   "$lib/matrix/media": {
     mxcToHttp?(this: void, mxc: string): string | null;
   };
   "$lib/i18n/index": {
-    t(this: void, key: "common.openRoomList"): string;
+    t(
+      this: void,
+      key: "common.openRoomList" | "messageInput.message",
+      vars?: { roomName: string },
+    ): string;
+  };
+  "$lib/utils/matrixLinks": {
+    parseMatrixLink(this: void, url: string): MatrixLink | null;
   };
   "$lib/data/emojiShortcodes": {
     emojiForShortcode(this: void, code: string): string | undefined;
@@ -102,6 +115,11 @@ export interface ZamiApi {
         result: string | null,
         args: Parameters<ClientModule[Key]>,
       ) => string | null | undefined,
+    ): Disposable;
+    instead(
+      target: ClientModule,
+      method: "getUrlPreview",
+      hook: (args: [string], original: (url: string) => Promise<unknown>) => Promise<unknown>,
     ): Disposable;
   };
   runes: {

@@ -32,7 +32,7 @@ export interface BridgedRoom {
 export const AWAITING = "Awaiting Leon";
 export const PROJECT_VISIBILITY_CHANNEL = "zami-project-visibility";
 const PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
-const TASK = /^(leon-\d+)(?:-[a-z0-9_-]+)?$/;
+const TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
 const TOPIC_SEPARATOR = " · ";
 const LINEAR_WORKFLOW = /^linear:v1 ([a-z_]+) (#[\da-f]{6}|-)(?: p([0-4]))?(?: |$)/i;
 const LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
@@ -100,8 +100,13 @@ function datedProject(name: string) {
   return { date, iso, suffix };
 }
 
-function channelName(name: string) {
-  return typeof name === "string" ? name.trim().replace(/^#/, "").toLowerCase() : "";
+export function channelName(name: string) {
+  return typeof name === "string" ? name.trim().replace(/^#+/, "").toLowerCase() : "";
+}
+
+export function issueChannel(name: string) {
+  const [, identifier, slug] = TASK.exec(channelName(name)) ?? [];
+  if (identifier) return { identifier, slug };
 }
 
 export function isSlackProtocol(id: unknown) {
@@ -156,7 +161,7 @@ export function readProjectVisibility(
 }
 
 function linearIssue(name: string, topic: string | null): IssueDetails | null {
-  const identifier = TASK.exec(name)?.[1];
+  const identifier = issueChannel(name)?.identifier;
   if (!identifier || !topic) return null;
   const [status, workflow, link, ...titleParts] = topic.split(TOPIC_SEPARATOR);
 
@@ -188,6 +193,7 @@ export function workspace(
   visibility: ReadonlyMap<string, { closed: ReadonlySet<string> }> = new Map(),
 ) {
   const channels = new Map<string, Channel>();
+  const slackIssues = new Map<string, { team: string; channel: Channel }[]>();
   const awaiting: Channel[] = [];
   const projects: Channel[] = [];
   for (const room of rooms) {
@@ -199,6 +205,14 @@ export function workspace(
     const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
     const channel = { id: room.roomId, name, ...(issue && { issue }), ...(project && { project }) };
     channels.set(channel.id, channel);
+    if (TASK.test(name)) {
+      const address = slackAddress(bridges);
+      if (address) {
+        const matches = slackIssues.get(address.channelId) ?? [];
+        matches.push({ team: address.team, channel });
+        slackIssues.set(address.channelId, matches);
+      }
+    }
     if (project && !room.archived) {
       const address = slackAddress(bridges);
       const snapshot = address ? visibility.get(address.team) : undefined;
@@ -229,5 +243,5 @@ export function workspace(
   };
   projects.sort((a, b) => sameDay(a.name) - sameDay(b.name) || a.name.localeCompare(b.name));
   const today = projects.find(({ name }) => Number.isFinite(sameDay(name))) ?? null;
-  return { channels, awaiting, projects, today };
+  return { channels, slackIssues, awaiting, projects, today };
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { composerPlaceholder, isMatrixPreview, issueForLink } from "./src/chat.ts";
 import { slackAccountAvatar } from "./src/slack-avatar.ts";
 import {
   projectDay,
@@ -10,6 +11,7 @@ import {
   workspace,
   type BridgedRoom,
 } from "./src/workspace.ts";
+import type { MatrixLink } from "./src/zami.ts";
 
 const day = "2026-11-21";
 
@@ -60,6 +62,71 @@ function room(
     bridges: [{ content: { protocol: { id: protocol }, ...extra } }],
   };
 }
+
+void test("Slack channel links use synced issue details and fall back to the channel slug", () => {
+  const issue = room(
+    "##leon-440-reply-to",
+    "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-440 · Reply to Farhan Shaikh `{start: 2026-11-22}`",
+    "slackgo",
+    { channel: { id: "TWORK-CISSUE" } },
+  );
+  const data = workspace([issue, room("general")], day);
+  const matrixLink = "https://matrix.to/#/!issue:beeper.com";
+  const targets = new Map<string, MatrixLink>([
+    [matrixLink, { kind: "room", roomId: issue.roomId }],
+    ["matrix:roomid/other:beeper.com", { kind: "room", roomId: "!other:beeper.com" }],
+    ["matrix:roomid/general:beeper.com", { kind: "room", roomId: "!general" }],
+    ["matrix:roomid/native:example.org", { kind: "room", roomId: "!native:example.org" }],
+    [
+      "matrix:roomid/issue:beeper.com/e/test",
+      { kind: "room", roomId: issue.roomId, eventId: "$test" },
+    ],
+  ]);
+  const resolve = (href: string, label = "leon-440-reply-to") =>
+    issueForLink(
+      href,
+      label,
+      data,
+      (url) => targets.get(url),
+      (id) => id === "!native:example.org",
+    );
+
+  const synced = {
+    identifier: "LEON-440",
+    title: "Reply to Farhan Shaikh",
+    status: "Awaiting Leon",
+    statusType: "started",
+    statusColor: "#f2c94c",
+  };
+  assert.deepEqual(resolve(matrixLink), synced);
+  assert.deepEqual(resolve("https://leon.slack.com/archives/CISSUE", ""), synced);
+  assert.deepEqual(resolve("https://app.slack.com/client/TWORK/CISSUE"), synced);
+  assert.equal(
+    resolve("matrix:roomid/other:beeper.com", "#leon-443-recurring-sleep-task")?.title,
+    "Recurring sleep task",
+  );
+  assert.equal(resolve("matrix:roomid/general:beeper.com"), undefined);
+  assert.equal(resolve("matrix:roomid/native:example.org"), undefined);
+  assert.equal(resolve("matrix:roomid/issue:beeper.com/e/test"), undefined);
+  assert.equal(resolve("https://leon.slack.com/archives/CISSUE/p123"), undefined);
+  assert.equal(resolve("https://leon.slack.com.example.org/archives/CISSUE"), undefined);
+});
+
+void test("Matrix web previews are suppressed without matching other sites", () => {
+  assert.equal(isMatrixPreview("https://matrix.to/#/!room:beeper.com"), true);
+  assert.equal(isMatrixPreview("https://matrix.to/"), true);
+  assert.equal(isMatrixPreview("https://matrix.to.example.org/"), false);
+  assert.equal(isMatrixPreview("https://example.org/matrix.to"), false);
+});
+
+void test("composer removes extra room sigils using the translated template", () => {
+  const normalize = composerPlaceholder("Message #ROOM", "ROOM");
+  assert.equal(normalize("Message ##project-example"), "Message #project-example");
+  assert.equal(normalize("Message #project-example"), "Message #project-example");
+  assert.equal(normalize("Reply to ##matrix"), "Reply to ##matrix");
+  const chinese = composerPlaceholder("给 #ROOM 发消息", "ROOM");
+  assert.equal(chinese("给 ###project-example 发消息"), "给 #project-example 发消息");
+});
 
 void test("Home uses the synced Linear status and excludes stale or unrelated Slack topics", () => {
   const topic = (number: number, status = "Awaiting Leon", type = "started") =>
