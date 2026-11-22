@@ -1271,7 +1271,8 @@ var STYLES = `
   color: var(--zam-text-primary);
 }
 .leon-rail {
-  inline-size: 3.5rem;
+  /* Match Zami's 32px footer avatar and its 0.5rem padding on each side. */
+  inline-size: calc(32px + 1rem);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -1300,6 +1301,7 @@ var STYLES = `
   display: grid;
   place-items: center;
   inline-size: 44px;
+  max-inline-size: calc(100% - 12px);
   margin-inline: 6px;
   color: var(--zam-text-secondary);
 }
