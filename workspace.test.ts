@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { composerPlaceholder, isMatrixPreview, issueForLink } from "./src/chat.ts";
+import { composerPlaceholder, isMatrixPreview, issueForLink, messageAuthor } from "./src/chat.ts";
 import { slackAccountAvatar } from "./src/slack-avatar.ts";
 import {
   projectDay,
@@ -126,6 +126,15 @@ void test("composer removes extra room sigils using the translated template", ()
   assert.equal(normalize("Reply to ##matrix"), "Reply to ##matrix");
   const chinese = composerPlaceholder("给 #ROOM 发消息", "ROOM");
   assert.equal(chinese("给 ###project-example 发消息"), "给 #project-example 发消息");
+});
+
+void test("chat distinguishes Hermes, other Slack bots, and people", () => {
+  const ownUserId = "@me:example.org";
+  assert.equal(messageAuthor(ownUserId, ownUserId, "Me"), "own");
+  assert.equal(messageAuthor("@hermes:example.org", ownUserId, "Hermes (bot)"), "hermes");
+  assert.equal(messageAuthor("@hermes:example.org", ownUserId, "Captain Claude (Slack)"), "hermes");
+  assert.equal(messageAuthor("@linear:example.org", ownUserId, "Linear Sync (bot)"), "bot");
+  assert.equal(messageAuthor("@person:example.org", ownUserId, "Someone (Slack)"), undefined);
 });
 
 void test("Home uses the synced Linear status and excludes stale or unrelated Slack topics", () => {

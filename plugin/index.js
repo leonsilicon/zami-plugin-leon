@@ -256,7 +256,19 @@ var EDITOR = "[data-zam-region=\"composer\"] [role=\"textbox\"][placeholder]";
 var EDITOR_ATTRIBUTES = ["placeholder", "aria-label"];
 var MESSAGE = "[data-zam-region=\"app\"] > main [data-event-id][data-sender]";
 var AUTHOR_ATTRIBUTE = "data-leon-author";
-var HERMES_NAME = /^(?:hermes|captain claude)(?: \(slack\))?$/i;
+var HERMES_NAME = /^(?:hermes|captain claude)(?: \((?:slack|bot)\))*$/i;
+var BOT_NAME = / \(bot\)(?: \(slack\))?$/i;
+var MESSAGE_CONTENT = "> .swipe-shift > .min-w-0";
+var MESSAGE_BODY = "> :is(.contents, .forward-block)";
+var TEXT_BUBBLE = "> :is(.contents, .own-bubble, .other-bubble):has(> .message-body)";
+var BOT_AVATAR = "leon-bot-avatar";
+var BOT_AVATAR_SIZE = 18;
+var BOT_ROW = `[${AUTHOR_ATTRIBUTE}="bot"]`;
+function messageAuthor(sender, ownUserId, displayName) {
+	if (sender === ownUserId) return "own";
+	if (HERMES_NAME.test(displayName)) return "hermes";
+	if (BOT_NAME.test(displayName)) return "bot";
+}
 function issueStatusIcon(statusType = "unknown", statusColor) {
 	const icon = document.createElement("span");
 	icon.className = "leon-issue-status";
@@ -281,23 +293,66 @@ function issueChip(issue) {
 	}
 	return chip;
 }
-function installChatPresentation(resolveIssue, normalizePlaceholder) {
+function installChatPresentation(resolveIssue, normalizePlaceholder, getMemberAvatar, renderAvatar) {
 	const links = /* @__PURE__ */ new WeakMap();
 	const editors = /* @__PURE__ */ new WeakMap();
+	const avatars = /* @__PURE__ */ new Map();
 	let messageRoom = null;
 	let ownUserId = null;
 	let roomsTick;
-	function messageAuthor(sender) {
-		if (!messageRoom || !sender) return;
-		if (sender === ownUserId) return "own";
-		const member = messageRoom.getMember(sender);
-		if (HERMES_NAME.test((member?.rawDisplayName || member?.name || "").trim())) return "hermes";
+	function removeAvatar(row) {
+		const avatar = avatars.get(row);
+		if (!avatar) return;
+		avatars.delete(row);
+		avatar.view.dispose();
+		avatar.target.remove();
+	}
+	function updateBotAvatar(row, room, sender, name) {
+		const body = row.querySelector(`:scope ${MESSAGE_CONTENT} ${MESSAGE_BODY}`);
+		const bubble = body?.querySelector(`:scope ${TEXT_BUBBLE}`) ?? body;
+		if (!bubble) {
+			removeAvatar(row);
+			return;
+		}
+		const src = getMemberAvatar(room, sender);
+		const key = JSON.stringify([
+			sender,
+			name,
+			src
+		]);
+		const current = avatars.get(row);
+		if (current?.target.parentElement === bubble && current.key === key) return;
+		removeAvatar(row);
+		const target = document.createElement("div");
+		target.className = BOT_AVATAR;
+		target.title = name;
+		target.setAttribute("role", "img");
+		target.setAttribute("aria-label", name);
+		const view = renderAvatar(target, {
+			id: sender,
+			name,
+			src,
+			size: BOT_AVATAR_SIZE
+		});
+		bubble.append(target);
+		avatars.set(row, {
+			target,
+			key,
+			view
+		});
 	}
 	function updateMessage(row) {
-		const author = messageAuthor(row.getAttribute("data-sender"));
-		if (row.getAttribute(AUTHOR_ATTRIBUTE) === (author ?? null)) return;
-		if (author) row.setAttribute(AUTHOR_ATTRIBUTE, author);
-		else row.removeAttribute(AUTHOR_ATTRIBUTE);
+		const sender = row.getAttribute("data-sender");
+		const room = messageRoom;
+		const member = room && sender ? room.getMember(sender) : null;
+		const name = (member?.rawDisplayName || member?.name || "").trim();
+		const author = room && sender ? messageAuthor(sender, ownUserId, name) : void 0;
+		if (row.getAttribute(AUTHOR_ATTRIBUTE) !== (author ?? null)) {
+			if (author) row.setAttribute(AUTHOR_ATTRIBUTE, author);
+			else row.removeAttribute(AUTHOR_ATTRIBUTE);
+		}
+		if (author === "bot" && room && sender) updateBotAvatar(row, room, sender, name);
+		else removeAvatar(row);
 	}
 	function refreshMessages() {
 		document.querySelectorAll(MESSAGE).forEach(updateMessage);
@@ -351,13 +406,25 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 		if (messageRoom) root.querySelectorAll(MESSAGE).forEach(updateMessage);
 	}
 	const observer = new MutationObserver((mutations) => {
+		let removedNodes = false;
 		for (const mutation of mutations) {
+			removedNodes ||= mutation.removedNodes.length > 0;
 			const { target } = mutation;
 			if (!(target instanceof Element) || !target.isConnected) continue;
+			if (target.closest(`.${BOT_AVATAR}`)) continue;
 			if (target.matches(EDITOR)) updateEditor(target);
 			if (target.matches(LINK)) updateLink(target);
-			if (mutation.attributeName === "data-sender" && target.matches(MESSAGE)) updateMessage(target);
+			if (mutation.attributeName === "data-sender" && (target.matches(MESSAGE) || target.hasAttribute(AUTHOR_ATTRIBUTE))) updateMessage(target);
+			if (mutation.type === "childList") {
+				const row = target.closest(BOT_ROW);
+				if (row) updateMessage(row);
+			}
 			for (const node of mutation.addedNodes) if (node instanceof Element && node.isConnected) scan(node);
+		}
+		if (removedNodes) for (const row of avatars.keys()) {
+			if (row.isConnected && row.matches(MESSAGE)) continue;
+			removeAvatar(row);
+			row.removeAttribute(AUTHOR_ATTRIBUTE);
 		}
 	});
 	observer.observe(document.body, {
@@ -383,6 +450,7 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 		refreshMessages,
 		dispose() {
 			observer.disconnect();
+			avatars.forEach((_, row) => removeAvatar(row));
 			document.querySelectorAll(`[${AUTHOR_ATTRIBUTE}]`).forEach((row) => {
 				row.removeAttribute(AUTHOR_ATTRIBUTE);
 			});
@@ -396,10 +464,13 @@ function installChatPresentation(resolveIssue, normalizePlaceholder) {
 		}
 	};
 }
-var AUTHORS = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}]`;
-var OWN_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="own"] > .swipe-shift > .min-w-0`;
-var HERMES_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="hermes"] > .swipe-shift > .min-w-0`;
-var OWN_BUBBLE = `${OWN_CONTENT} > :is(.contents, .forward-block) > :is(.contents, .own-bubble):has(> .message-body)`;
+var LEON_CHAT = "[data-leon-mounted][data-leon-ready]";
+var AUTHORS = `${LEON_CHAT} [${AUTHOR_ATTRIBUTE}]`;
+var OWN_CONTENT = `${LEON_CHAT} [${AUTHOR_ATTRIBUTE}="own"] ${MESSAGE_CONTENT}`;
+var HERMES_CONTENT = `${LEON_CHAT} [${AUTHOR_ATTRIBUTE}="hermes"] ${MESSAGE_CONTENT}`;
+var BOT_CONTENT = `${LEON_CHAT} ${BOT_ROW}:not([data-leon-task-summary]) ${MESSAGE_CONTENT}`;
+var OWN_BUBBLE = `${OWN_CONTENT} ${MESSAGE_BODY} ${TEXT_BUBBLE}`;
+var BOT_BUBBLE = `${BOT_CONTENT} div:has(> .${BOT_AVATAR})`;
 var MESSAGE_STYLES = `
 ${AUTHORS} > .swipe-shift > .w-10 { display: none; }
 ${AUTHORS} > .swipe-shift > .min-w-0 > span.absolute.pointer-events-none { display: none; }
@@ -414,24 +485,41 @@ ${OWN_CONTENT} > .forward-block { max-inline-size: 100%; }
 ${OWN_CONTENT} > :is(.contents, .forward-block) > .w-fit.max-w-full {
   max-inline-size: min(80%, 42rem);
 }
-${OWN_BUBBLE} {
+${OWN_BUBBLE},
+${BOT_BUBBLE} {
   display: block;
   inline-size: fit-content;
   max-inline-size: min(80%, 42rem);
-  margin-inline-start: auto;
   padding: .5rem .85rem;
   border-radius: 1rem;
   background: var(--zam-bg-selected);
 }
+${OWN_BUBBLE} { margin-inline-start: auto; }
+${BOT_BUBBLE} {
+  position: relative;
+  min-block-size: calc(${BOT_AVATAR_SIZE}px + 1rem);
+  margin-inline-end: auto;
+  padding-inline-end: calc(${BOT_AVATAR_SIZE}px + 1.1rem);
+  border-start-start-radius: .25rem;
+}
+.${BOT_AVATAR} { display: none; }
+${BOT_CONTENT} .${BOT_AVATAR} {
+  position: absolute;
+  inset-block-start: .5rem;
+  inset-inline-end: .5rem;
+  display: block;
+  border-radius: 50%;
+}
 ${OWN_BUBBLE}::after { display: none; }
-${OWN_BUBBLE} > .message-body {
+${OWN_BUBBLE} > .message-body,
+${BOT_BUBBLE} > .message-body {
   color: var(--zam-text-primary);
   overflow-wrap: anywhere;
 }
 ${OWN_BUBBLE} .message-body :is(a, .room-mention) {
   color: var(--zam-link, var(--zam-accent-text));
 }
-${HERMES_CONTENT} > :is(.contents, .forward-block) > .other-bubble { display: contents; }
+${HERMES_CONTENT} ${MESSAGE_BODY} > .other-bubble { display: contents; }
 `;
 // src/project-icon.ts
 var SVG_NS = "http://www.w3.org/2000/svg";
@@ -759,7 +847,7 @@ function makeSwitcher(currentMode, setMode) {
 		}
 	};
 }
-function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messageModule, mxcToHttp, notifications, t, parseMatrixLink, emojiForShortcode }) {
+function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avatar, messageModule, mxcToHttp, notifications, t, parseMatrixLink, emojiForShortcode }) {
 	const state = rooms.roomsState;
 	let mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
 	let day = projectDay();
@@ -803,7 +891,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, messa
 	const resolveIssue = (url, label) => issueForLink(url, label, data, (href) => parseMatrixLink?.(href), (id) => Boolean(clientModule.getRoom(id)));
 	const preview = typeof clientModule.getUrlPreview === "function" ? zami.patch.instead(clientModule, "getUrlPreview", ([url], original) => isMatrixPreview(url) || resolveIssue(url, "") ? Promise.resolve(null) : original(url)) : void 0;
 	const roomNameToken = "LEON_ROOM_NAME";
-	const chatPresentation = installChatPresentation(resolveIssue, composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken));
+	const chatPresentation = installChatPresentation(resolveIssue, composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken), (room, userId) => clientModule.getMemberAvatar(room, userId), (target, props) => zami.ui.render(target, avatar, props));
 	const taskSummary = installTaskSummary(clientModule);
 	const rail = element("nav", "leon-rail");
 	rail.setAttribute("aria-label", "Linear projects");
@@ -1379,11 +1467,12 @@ var src_default = {
 	async onload(zam) {
 		const zami = zam.zami;
 		if (!zami) throw new Error("Leon requires the Zami plugin API.");
-		const [rooms, { interfaceState: ui, closeSidebar }, { auth }, clientModule, messageModule, media, notifications, { t }, matrixLinks, emoji] = await Promise.all([
+		const [rooms, { interfaceState: ui, closeSidebar }, { auth }, clientModule, avatar, messageModule, media, notifications, { t }, matrixLinks, emoji] = await Promise.all([
 			zami.import("$lib/stores/rooms.svelte"),
 			zami.import("$lib/stores/interface.svelte"),
 			zami.import("$lib/stores/auth.svelte"),
 			zami.import("$lib/matrix/client"),
+			zami.components.get("Avatar"),
 			zami.import("$lib/matrix/pluginHost").catch(() => void 0),
 			zami.import("$lib/matrix/media").catch(() => void 0),
 			zami.import("$lib/stores/notifications.svelte"),
@@ -1397,6 +1486,7 @@ var src_default = {
 			closeSidebar,
 			auth,
 			clientModule,
+			avatar,
 			messageModule,
 			mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
 			notifications,

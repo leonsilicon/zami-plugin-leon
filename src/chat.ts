@@ -87,7 +87,20 @@ const EDITOR = '[data-zam-region="composer"] [role="textbox"][placeholder]';
 const EDITOR_ATTRIBUTES = ["placeholder", "aria-label"] as const;
 const MESSAGE = '[data-zam-region="app"] > main [data-event-id][data-sender]';
 const AUTHOR_ATTRIBUTE = "data-leon-author";
-const HERMES_NAME = /^(?:hermes|captain claude)(?: \(slack\))?$/i;
+const HERMES_NAME = /^(?:hermes|captain claude)(?: \((?:slack|bot)\))*$/i;
+const BOT_NAME = / \(bot\)(?: \(slack\))?$/i;
+const MESSAGE_CONTENT = "> .swipe-shift > .min-w-0";
+const MESSAGE_BODY = "> :is(.contents, .forward-block)";
+const TEXT_BUBBLE = "> :is(.contents, .own-bubble, .other-bubble):has(> .message-body)";
+const BOT_AVATAR = "leon-bot-avatar";
+const BOT_AVATAR_SIZE = 18;
+const BOT_ROW = `[${AUTHOR_ATTRIBUTE}="bot"]`;
+
+export function messageAuthor(sender: string, ownUserId: string | null, displayName: string) {
+  if (sender === ownUserId) return "own";
+  if (HERMES_NAME.test(displayName)) return "hermes";
+  if (BOT_NAME.test(displayName)) return "bot";
+}
 
 export function issueStatusIcon(statusType = "unknown", statusColor?: string | null) {
   const icon = document.createElement("span");
@@ -119,25 +132,66 @@ function issueChip(issue: NonNullable<ReturnType<typeof issueForLink>>) {
 export function installChatPresentation(
   resolveIssue: (href: string, label: string) => ReturnType<typeof issueForLink>,
   normalizePlaceholder: (value: string) => string,
+  getMemberAvatar: (room: Room, userId: string) => string | null,
+  renderAvatar: (
+    target: HTMLElement,
+    props: { id: string; name: string; src: string | null; size: number },
+  ) => { dispose(): void },
 ) {
   const links = new WeakMap<Element, { original: Node[]; chip: HTMLElement; key: string }>();
   const editors = new WeakMap<Element, Map<string, { original: string; normalized: string }>>();
+  const avatars = new Map<
+    Element,
+    { target: HTMLElement; key: string; view: { dispose(): void } }
+  >();
   let messageRoom: Room | null = null;
   let ownUserId: string | null = null;
   let roomsTick: number | undefined;
 
-  function messageAuthor(sender: string | null) {
-    if (!messageRoom || !sender) return;
-    if (sender === ownUserId) return "own";
-    const member = messageRoom.getMember(sender);
-    if (HERMES_NAME.test((member?.rawDisplayName || member?.name || "").trim())) return "hermes";
+  function removeAvatar(row: Element) {
+    const avatar = avatars.get(row);
+    if (!avatar) return;
+    avatars.delete(row);
+    avatar.view.dispose();
+    avatar.target.remove();
+  }
+
+  function updateBotAvatar(row: Element, room: Room, sender: string, name: string) {
+    const body = row.querySelector(`:scope ${MESSAGE_CONTENT} ${MESSAGE_BODY}`);
+    // Keep link previews outside text bubbles. Media and custom renderers use the body wrapper.
+    const bubble = body?.querySelector(`:scope ${TEXT_BUBBLE}`) ?? body;
+    if (!bubble) {
+      removeAvatar(row);
+      return;
+    }
+    const src = getMemberAvatar(room, sender);
+    const key = JSON.stringify([sender, name, src]);
+    const current = avatars.get(row);
+    if (current?.target.parentElement === bubble && current.key === key) return;
+
+    removeAvatar(row);
+    const target = document.createElement("div");
+    target.className = BOT_AVATAR;
+    target.title = name;
+    target.setAttribute("role", "img");
+    target.setAttribute("aria-label", name);
+    const view = renderAvatar(target, { id: sender, name, src, size: BOT_AVATAR_SIZE });
+    bubble.append(target);
+    avatars.set(row, { target, key, view });
   }
 
   function updateMessage(row: Element) {
-    const author = messageAuthor(row.getAttribute("data-sender"));
-    if (row.getAttribute(AUTHOR_ATTRIBUTE) === (author ?? null)) return;
-    if (author) row.setAttribute(AUTHOR_ATTRIBUTE, author);
-    else row.removeAttribute(AUTHOR_ATTRIBUTE);
+    const sender = row.getAttribute("data-sender");
+    const room = messageRoom;
+    const member = room && sender ? room.getMember(sender) : null;
+    const name = (member?.rawDisplayName || member?.name || "").trim();
+    const author = room && sender ? messageAuthor(sender, ownUserId, name) : undefined;
+    if (row.getAttribute(AUTHOR_ATTRIBUTE) !== (author ?? null)) {
+      if (author) row.setAttribute(AUTHOR_ATTRIBUTE, author);
+      else row.removeAttribute(AUTHOR_ATTRIBUTE);
+    }
+    if (author === "bot" && room && sender) updateBotAvatar(row, room, sender, name);
+    else removeAvatar(row);
   }
 
   function refreshMessages() {
@@ -189,15 +243,32 @@ export function installChatPresentation(
   }
 
   const observer = new MutationObserver((mutations) => {
+    let removedNodes = false;
     for (const mutation of mutations) {
+      removedNodes ||= mutation.removedNodes.length > 0;
       const { target } = mutation;
       if (!(target instanceof Element) || !target.isConnected) continue;
+      if (target.closest(`.${BOT_AVATAR}`)) continue;
       if (target.matches(EDITOR)) updateEditor(target);
       if (target.matches(LINK)) updateLink(target);
-      if (mutation.attributeName === "data-sender" && target.matches(MESSAGE))
+      if (
+        mutation.attributeName === "data-sender" &&
+        (target.matches(MESSAGE) || target.hasAttribute(AUTHOR_ATTRIBUTE))
+      )
         updateMessage(target);
+      if (mutation.type === "childList") {
+        const row = target.closest(BOT_ROW);
+        if (row) updateMessage(row);
+      }
       for (const node of mutation.addedNodes) {
         if (node instanceof Element && node.isConnected) scan(node);
+      }
+    }
+    if (removedNodes) {
+      for (const row of avatars.keys()) {
+        if (row.isConnected && row.matches(MESSAGE)) continue;
+        removeAvatar(row);
+        row.removeAttribute(AUTHOR_ATTRIBUTE);
       }
     }
   });
@@ -221,6 +292,7 @@ export function installChatPresentation(
     refreshMessages,
     dispose() {
       observer.disconnect();
+      avatars.forEach((_, row) => removeAvatar(row));
       document.querySelectorAll(`[${AUTHOR_ATTRIBUTE}]`).forEach((row) => {
         row.removeAttribute(AUTHOR_ATTRIBUTE);
       });
@@ -238,10 +310,13 @@ export function installChatPresentation(
   };
 }
 
-const AUTHORS = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}]`;
-const OWN_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="own"] > .swipe-shift > .min-w-0`;
-const HERMES_CONTENT = `[data-leon-mounted][data-leon-ready] [${AUTHOR_ATTRIBUTE}="hermes"] > .swipe-shift > .min-w-0`;
-const OWN_BUBBLE = `${OWN_CONTENT} > :is(.contents, .forward-block) > :is(.contents, .own-bubble):has(> .message-body)`;
+const LEON_CHAT = "[data-leon-mounted][data-leon-ready]";
+const AUTHORS = `${LEON_CHAT} [${AUTHOR_ATTRIBUTE}]`;
+const OWN_CONTENT = `${LEON_CHAT} [${AUTHOR_ATTRIBUTE}="own"] ${MESSAGE_CONTENT}`;
+const HERMES_CONTENT = `${LEON_CHAT} [${AUTHOR_ATTRIBUTE}="hermes"] ${MESSAGE_CONTENT}`;
+const BOT_CONTENT = `${LEON_CHAT} ${BOT_ROW}:not([data-leon-task-summary]) ${MESSAGE_CONTENT}`;
+const OWN_BUBBLE = `${OWN_CONTENT} ${MESSAGE_BODY} ${TEXT_BUBBLE}`;
+const BOT_BUBBLE = `${BOT_CONTENT} div:has(> .${BOT_AVATAR})`;
 
 export const MESSAGE_STYLES = `
 ${AUTHORS} > .swipe-shift > .w-10 { display: none; }
@@ -257,22 +332,39 @@ ${OWN_CONTENT} > .forward-block { max-inline-size: 100%; }
 ${OWN_CONTENT} > :is(.contents, .forward-block) > .w-fit.max-w-full {
   max-inline-size: min(80%, 42rem);
 }
-${OWN_BUBBLE} {
+${OWN_BUBBLE},
+${BOT_BUBBLE} {
   display: block;
   inline-size: fit-content;
   max-inline-size: min(80%, 42rem);
-  margin-inline-start: auto;
   padding: .5rem .85rem;
   border-radius: 1rem;
   background: var(--zam-bg-selected);
 }
+${OWN_BUBBLE} { margin-inline-start: auto; }
+${BOT_BUBBLE} {
+  position: relative;
+  min-block-size: calc(${BOT_AVATAR_SIZE}px + 1rem);
+  margin-inline-end: auto;
+  padding-inline-end: calc(${BOT_AVATAR_SIZE}px + 1.1rem);
+  border-start-start-radius: .25rem;
+}
+.${BOT_AVATAR} { display: none; }
+${BOT_CONTENT} .${BOT_AVATAR} {
+  position: absolute;
+  inset-block-start: .5rem;
+  inset-inline-end: .5rem;
+  display: block;
+  border-radius: 50%;
+}
 ${OWN_BUBBLE}::after { display: none; }
-${OWN_BUBBLE} > .message-body {
+${OWN_BUBBLE} > .message-body,
+${BOT_BUBBLE} > .message-body {
   color: var(--zam-text-primary);
   overflow-wrap: anywhere;
 }
 ${OWN_BUBBLE} .message-body :is(a, .room-mention) {
   color: var(--zam-link, var(--zam-accent-text));
 }
-${HERMES_CONTENT} > :is(.contents, .forward-block) > .other-bubble { display: contents; }
+${HERMES_CONTENT} ${MESSAGE_BODY} > .other-bubble { display: contents; }
 `;

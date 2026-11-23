@@ -35,6 +35,8 @@ interface Disposable {
   dispose(): void;
 }
 
+export type Component = (anchor: Node, props: Record<string, unknown>) => unknown;
+
 export interface HostModules {
   "$lib/stores/rooms.svelte": {
     roomsState: {
@@ -110,6 +112,10 @@ type MessageModule = HostModules["$lib/matrix/pluginHost"];
 
 export interface ZamiApi {
   import<Key extends keyof HostModules>(id: Key): Promise<HostModules[Key]>;
+  components: { get(name: string): Promise<Component> };
+  ui: {
+    render(target: HTMLElement, component: Component, props: Record<string, unknown>): Disposable;
+  };
   app: {
     loadEarly(): void;
     /** The room Zami opens on. Absent in Zami builds from before launch pages. */

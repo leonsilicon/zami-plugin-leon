@@ -23,7 +23,7 @@ import {
   type BridgedRoom,
   type Channel,
 } from "./workspace.ts";
-import type { HostModules, MatrixClient, MatrixEvent, ZamApi, ZamiApi } from "./zami.ts";
+import type { Component, HostModules, MatrixClient, MatrixEvent, ZamApi, ZamiApi } from "./zami.ts";
 
 type Mode = "leon" | "zami";
 type ClientModule = HostModules["$lib/matrix/client"];
@@ -33,6 +33,7 @@ interface WorkspaceModules {
   closeSidebar: HostModules["$lib/stores/interface.svelte"]["closeSidebar"];
   auth: HostModules["$lib/stores/auth.svelte"]["auth"];
   clientModule: ClientModule;
+  avatar: Component;
   messageModule?: HostModules["$lib/matrix/pluginHost"];
   mxcToHttp: HostModules["$lib/matrix/media"]["mxcToHttp"];
   notifications: HostModules["$lib/stores/notifications.svelte"];
@@ -272,6 +273,7 @@ function install(
     closeSidebar,
     auth,
     clientModule,
+    avatar,
     messageModule,
     mxcToHttp,
     notifications,
@@ -350,6 +352,8 @@ function install(
   const chatPresentation = installChatPresentation(
     resolveIssue,
     composerPlaceholder(t("messageInput.message", { roomName: roomNameToken }), roomNameToken),
+    (room, userId) => clientModule.getMemberAvatar(room, userId),
+    (target, props) => zami.ui.render(target, avatar, props),
   );
   const taskSummary = installTaskSummary(clientModule);
 
@@ -1109,6 +1113,7 @@ export default {
       { interfaceState: ui, closeSidebar },
       { auth },
       clientModule,
+      avatar,
       messageModule,
       media,
       notifications,
@@ -1120,6 +1125,7 @@ export default {
       zami.import("$lib/stores/interface.svelte"),
       zami.import("$lib/stores/auth.svelte"),
       zami.import("$lib/matrix/client"),
+      zami.components.get("Avatar"),
       zami.import("$lib/matrix/pluginHost").catch(() => undefined),
       zami.import("$lib/matrix/media").catch(() => undefined),
       zami.import("$lib/stores/notifications.svelte"),
@@ -1133,6 +1139,7 @@ export default {
       closeSidebar,
       auth,
       clientModule,
+      avatar,
       messageModule,
       mxcToHttp: media?.mxcToHttp ?? clientModule.mxcToHttp,
       notifications,
