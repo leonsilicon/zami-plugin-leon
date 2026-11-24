@@ -12,10 +12,9 @@ import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
 import { installTaskSummary, TASK_SUMMARY_STYLES } from "./task-summary.ts";
 import {
   AWAITING,
-  channelName,
   issueChannel,
   LINEAR_ISSUE_ACCOUNT_DATA,
-  PROJECT_VISIBILITY_CHANNEL,
+  PROJECT_VISIBILITY_ACCOUNT_DATA,
   projectDay,
   projectDayEnd,
   projectLabel,
@@ -288,11 +287,6 @@ function install(
   let mode: Mode = zam.storage.get("view") === "zami" ? "zami" : "leon";
   let day = projectDay();
   let data = workspace([], day);
-  const projectVisibility = new Map<
-    string,
-    NonNullable<ReturnType<typeof readProjectVisibility>>
-  >();
-  const visibilityRooms = new Set<string>();
   let activeAccount: string | null = null;
   let registeredHome: string | null = null;
   let dayEnd: { day: string; at: number } | undefined;
@@ -943,7 +937,8 @@ function install(
 
   function onAccountData(event: MatrixEvent) {
     const type = event.getType();
-    if (type === LINEAR_ISSUE_ACCOUNT_DATA) schedule(true);
+    if (type === LINEAR_ISSUE_ACCOUNT_DATA || type === PROJECT_VISIBILITY_ACCOUNT_DATA)
+      schedule(true);
     else if (type === BRIDGE_ACCOUNT_DATA) schedule();
   }
 
@@ -963,11 +958,6 @@ function install(
     schedule(true);
   }
 
-  function onProjectVisibility(event: MatrixEvent) {
-    const id = event.getRoomId();
-    if (id && visibilityRooms.has(id)) schedule(true);
-  }
-
   function update() {
     queued = false;
     if (stopped) return;
@@ -975,15 +965,11 @@ function install(
     if (currentClient !== client) {
       client?.off("RoomState.events", onState);
       client?.off("Room.tags", onTags);
-      client?.off("Room.timeline", onProjectVisibility);
-      client?.off("Event.decrypted", onProjectVisibility);
       client?.off("accountData", onAccountData);
       client?.off("Room.accountData", onAccountData);
       client = currentClient;
       client?.on("RoomState.events", onState);
       client?.on("Room.tags", onTags);
-      client?.on("Room.timeline", onProjectVisibility);
-      client?.on("Event.decrypted", onProjectVisibility);
       client?.on("accountData", onAccountData);
       client?.on("Room.accountData", onAccountData);
       refresh = true;
@@ -991,25 +977,15 @@ function install(
     if (auth.userId !== activeAccount) {
       activeAccount = auth.userId;
       data = workspace([], day);
-      projectVisibility.clear();
-      visibilityRooms.clear();
       resetLanding();
       refresh = true;
     }
     if (refresh) {
       const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
-      visibilityRooms.clear();
-      for (const room of bridgedRooms) {
-        if (channelName(room.name) !== PROJECT_VISIBILITY_CHANNEL) continue;
-        visibilityRooms.add(room.roomId);
-        const snapshot = readProjectVisibility(room, (id) => zam.matrix.getRecentMessages(id));
-        if (
-          snapshot &&
-          snapshot.timestamp >= (projectVisibility.get(snapshot.team)?.timestamp ?? 0)
-        )
-          projectVisibility.set(snapshot.team, snapshot);
-      }
-      data = workspace(bridgedRooms, day, projectVisibility);
+      const visibility = activeAccount
+        ? readProjectVisibility(zam.matrix.getAccountData(PROJECT_VISIBILITY_ACCOUNT_DATA))
+        : null;
+      data = workspace(bridgedRooms, day, visibility);
       chatPresentation.refreshIssues();
       if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) {
         selectedProject = null;
@@ -1092,8 +1068,6 @@ function install(
     document.removeEventListener("visibilitychange", checkDay);
     client?.off("RoomState.events", onState);
     client?.off("Room.tags", onTags);
-    client?.off("Room.timeline", onProjectVisibility);
-    client?.off("Event.decrypted", onProjectVisibility);
     client?.off("accountData", onAccountData);
     client?.off("Room.accountData", onAccountData);
     roomWatch.dispose();

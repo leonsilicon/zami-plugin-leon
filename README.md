@@ -25,7 +25,7 @@ The plugin reads joined Slack rooms through Beeper. `slack22linear` publishes is
 
 Manual section moves and archived rooms with stale membership state in Beeper can differ from the sidebar.
 
-The rail uses `#project-…` Slack channels as Linear projects. `slack22linear` appends the project color and icon to the channel topic and publishes closed channel IDs in the private `#zami-project-visibility` channel. The plugin reads that channel through Beeper and hides closed Linear projects, Slack archives, and projects archived in Beeper. While the first status snapshot syncs, the rail uses Beeper's archive tags and hides past daily projects. Dailylinear provisions today's channel. Chat and delivery use Zami's existing Beeper session.
+The rail uses `#project-…` Slack channels as Linear projects. The channel topic carries the project color and icon. The Beeper inbox publishes closed Slack and Linear project channels as Matrix account data on Leon's account. While the first snapshot syncs, the rail uses Beeper's archive tags and hides past daily projects. Dailylinear provisions today's channel. Chat and delivery use Zami's existing Beeper session.
 
 ## Develop
 

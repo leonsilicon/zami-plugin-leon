@@ -306,17 +306,14 @@ void test("today's project handles channel naming collisions and early dailyline
 void test("the rail excludes Beeper archives and closed Slack projects for the matching workspace", () => {
   const slack = (name: string, id: string, team = "TWORK") =>
     room(name, null, "slackgo", { channel: { id: `${team}-${id}` } });
-  const statusRoom = slack("#zami-project-visibility", "GFEED");
-  const snapshot = readProjectVisibility(statusRoom, () => [
-    { body: "zami-projects:v1 COPEN", timestamp: 1 },
-    { body: "zami-projects:v1 CARCHIVED CDONE CTODAY", timestamp: 2 },
-    { body: "zami-projects:v1 invalid snapshot", timestamp: 3 },
-  ]);
+  const snapshot = readProjectVisibility({
+    version: 1,
+    teamId: "TWORK",
+    closedChannelIds: ["CARCHIVED", "CDONE", "CTODAY"],
+  });
   assert.ok(snapshot);
-  assert.deepEqual([...snapshot.closed], ["CARCHIVED", "CDONE", "CTODAY"]);
   const data = workspace(
     [
-      statusRoom,
       slack("project-2026-11-21", "CTODAY"),
       slack("project-2026-11-21-2", "CTODAYSECOND"),
       slack("project-archived", "CARCHIVED"),
@@ -327,18 +324,22 @@ void test("the rail excludes Beeper archives and closed Slack projects for the m
       { ...slack("project-beeper-archive", "CBEEPER"), archived: true },
     ],
     day,
-    new Map([[snapshot.team, snapshot]]),
+    snapshot,
   );
   assert.equal(data.today?.name, "project-2026-11-21-2");
   assert.deepEqual(
     data.projects.map(({ name }) => name),
     ["project-2026-11-21-2", "project-2026-11-19", "project-open", "project-same-channel-id"],
   );
-  assert.equal(data.channels.has(statusRoom.roomId), false);
   assert.equal(data.channels.has("!project-done"), true);
-  assert.deepEqual(
-    readProjectVisibility(statusRoom, () => [{ body: "zami-projects:v1", timestamp: 4 }])?.closed,
-    new Set(),
+  const reopened = readProjectVisibility({ version: 1, teamId: "TWORK", closedChannelIds: [] });
+  assert.ok(reopened);
+  const reopenedProject = slack("project-done", "CDONE");
+  assert.deepEqual(workspace([reopenedProject], day, snapshot).projects, []);
+  assert.equal(workspace([reopenedProject], day, reopened).projects[0]?.name, "project-done");
+  assert.equal(
+    readProjectVisibility({ version: 1, teamId: "TWORK", closedChannelIds: ["invalid"] }),
+    null,
   );
 });
 

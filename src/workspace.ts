@@ -32,8 +32,7 @@ export interface BridgedRoom {
 
 export const AWAITING = "Awaiting Leon";
 export const LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
-export const PROJECT_VISIBILITY_CHANNEL = "zami-project-visibility";
-const PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
+export const PROJECT_VISIBILITY_ACCOUNT_DATA = "ai.leonsilicon.linear.project_visibility";
 const TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
 const LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
 const CLOSED_STATUS_TYPES = new Set(["completed", "canceled", "duplicate"]);
@@ -148,19 +147,24 @@ function slackAddress(bridges: BridgeState[]) {
   return null;
 }
 
+interface ProjectVisibility {
+  teamId: string;
+  closed: ReadonlySet<string>;
+}
+
 export function readProjectVisibility(
-  room: BridgedRoom,
-  readMessages: (id: string) => readonly { body: string; timestamp: number }[],
-) {
-  const address = slackAddress(slackBridges(room));
-  if (!address) return null;
-  for (const { body, timestamp } of [...readMessages(room.roomId)].reverse()) {
-    const [prefix, ...ids] = body.trim().split(" ");
-    if (prefix === PROJECT_VISIBILITY_PREFIX && ids.every((id) => /^[CG][A-Z0-9]+$/.test(id))) {
-      return { team: address.team, closed: new Set(ids), timestamp };
-    }
-  }
-  return null;
+  data: Record<string, unknown> | null,
+): ProjectVisibility | null {
+  if (!data || data.version !== 1) return null;
+  const { teamId, closedChannelIds } = data;
+  if (
+    typeof teamId !== "string" ||
+    !/^T[A-Z0-9]+$/.test(teamId) ||
+    !Array.isArray(closedChannelIds) ||
+    !closedChannelIds.every((id) => typeof id === "string" && /^[CG][A-Z0-9]+$/.test(id))
+  )
+    return null;
+  return { teamId, closed: new Set(closedChannelIds) };
 }
 
 function issueFromAccountData(
@@ -209,7 +213,7 @@ function projectAppearance(topic: string | null): ProjectAppearance {
 export function workspace(
   rooms: BridgedRoom[],
   day: string,
-  visibility: ReadonlyMap<string, { closed: ReadonlySet<string> }> = new Map(),
+  visibility: ProjectVisibility | null = null,
 ) {
   const channels = new Map<string, Channel>();
   const slackIssues = new Map<string, { team: string; channel: Channel }[]>();
@@ -219,7 +223,6 @@ export function workspace(
     const bridges = slackBridges(room);
     if (!bridges.length) continue;
     const name = channelName(room.name);
-    if (name === PROJECT_VISIBILITY_CHANNEL) continue;
     const address = slackAddress(bridges);
     const issue = issueFromAccountData(name, address, room.issueMetadata);
     const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
@@ -233,11 +236,10 @@ export function workspace(
       }
     }
     if (project && !room.archived) {
-      const snapshot = address ? visibility.get(address.team) : undefined;
       // Dailylinear closes past days. The snapshot can also show a manually reopened day.
       const closed =
-        snapshot && address
-          ? snapshot.closed.has(address.channelId)
+        visibility && address?.team === visibility.teamId
+          ? visibility.closed.has(address.channelId)
           : (datedProject(name)?.iso ?? day) < day;
       if (!closed) projects.push(channel);
     }
