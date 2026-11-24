@@ -4,7 +4,7 @@ import type { HostModules } from "./zami.ts";
 const ROOM = "data-leon-task";
 const SUMMARY = "data-leon-task-summary";
 const TITLE = "data-leon-task-title";
-const LINEAR_SYNC = /^Linear Sync(?: \(bot\))?$/i;
+const SYNC_BOT = /^(?:slack22linear|Linear Sync)(?: \(bot\))?$/i;
 
 type TaskTimeline = { timeline: HTMLElement; channel: Channel; identifier: string };
 type Intro = { row: Element; title: Element };
@@ -17,7 +17,7 @@ function findIntro(
   const room = rooms.getRoom(channel.id);
   if (!room) return;
   const label = `${identifier.toUpperCase()}:`;
-  // Linear Sync starts its intro with the issue link. Keeping the original row
+  // slack22linear starts its intro with the issue link. Keeping the original row
   // preserves Zam's formatting, message actions, and thread entry point.
   for (const row of timeline.querySelectorAll(":scope > [data-row-index] > [data-sender]")) {
     const body = row.querySelector(".message-body");
@@ -29,7 +29,7 @@ function findIntro(
     )
       continue;
     const member = room.getMember(row.getAttribute("data-sender") ?? "");
-    if (LINEAR_SYNC.test((member?.rawDisplayName || member?.name || "").trim())) {
+    if (SYNC_BOT.test((member?.rawDisplayName || member?.name || "").trim())) {
       return { row, title };
     }
   }

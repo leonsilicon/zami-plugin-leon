@@ -589,7 +589,7 @@ function slackAccountAvatar(accountData, roomBridges) {
 var ROOM = "data-leon-task";
 var SUMMARY = "data-leon-task-summary";
 var TITLE = "data-leon-task-title";
-var LINEAR_SYNC = /^Linear Sync(?: \(bot\))?$/i;
+var SYNC_BOT = /^(?:slack22linear|Linear Sync)(?: \(bot\))?$/i;
 function findIntro({ timeline, channel, identifier }, rooms) {
 	const room = rooms.getRoom(channel.id);
 	if (!room) return;
@@ -599,7 +599,7 @@ function findIntro({ timeline, channel, identifier }, rooms) {
 		const title = body?.querySelector("a[href]");
 		if (!title?.textContent?.trimStart().startsWith(label) || !body?.textContent?.trimStart().startsWith(label) || linearIssueIdentifier(title.getAttribute("href") ?? "") !== identifier) continue;
 		const member = room.getMember(row.getAttribute("data-sender") ?? "");
-		if (LINEAR_SYNC.test((member?.rawDisplayName || member?.name || "").trim())) return {
+		if (SYNC_BOT.test((member?.rawDisplayName || member?.name || "").trim())) return {
 			row,
 			title
 		};

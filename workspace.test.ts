@@ -151,7 +151,7 @@ void test("chat distinguishes Hermes, other Slack bots, and people", () => {
   assert.equal(messageAuthor(ownUserId, ownUserId, "Me"), "own");
   assert.equal(messageAuthor("@hermes:example.org", ownUserId, "Hermes (bot)"), "hermes");
   assert.equal(messageAuthor("@hermes:example.org", ownUserId, "Captain Claude (Slack)"), "hermes");
-  assert.equal(messageAuthor("@linear:example.org", ownUserId, "Linear Sync (bot)"), "bot");
+  assert.equal(messageAuthor("@linear:example.org", ownUserId, "slack22linear (bot)"), "bot");
   assert.equal(messageAuthor("@person:example.org", ownUserId, "Someone (Slack)"), undefined);
 });
 
