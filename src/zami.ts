@@ -83,6 +83,14 @@ export interface HostModules {
     getOwnAvatarUrl(): string | null;
     getMemberAvatar(room: Room, userId: string): string | null;
     getUrlPreview?(url: string): Promise<unknown>;
+    /** Whether the room list is still the one Zami saved, with sync yet to deliver rooms. */
+    isRoomListFromCache?(): boolean;
+    /** Sends a message Zami's outbox held: while offline, or until sync delivered its room. */
+    sendOutboxMessage?(
+      roomId: string,
+      content: Record<string, unknown>,
+      txnId?: string,
+    ): Promise<string>;
     mxcToHttp?(this: void, mxc: string): string | null;
   };
   "$lib/matrix/media": {
@@ -142,6 +150,14 @@ export interface ZamiApi {
       target: MessageModule,
       method: "sendEventContent",
       hook: (result: Promise<string>, args: Parameters<MessageModule["sendEventContent"]>) => void,
+    ): Disposable;
+    after(
+      target: ClientModule,
+      method: "sendOutboxMessage",
+      hook: (
+        result: Promise<string>,
+        args: [roomId: string, content: Record<string, unknown>, txnId?: string],
+      ) => void,
     ): Disposable;
     instead(
       target: ClientModule,

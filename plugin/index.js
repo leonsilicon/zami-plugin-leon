@@ -85,6 +85,26 @@ function slackBridges(room) {
 		return isSlackProtocol(protocol) && content["com.beeper.room_type"] !== "dm" && roomType !== "dm" && roomType !== "group_dm" && roomType !== "space";
 	});
 }
+/**
+* The Slack channels among `rooms`, with only what `workspace` reads of their bridge state:
+* small enough to keep between launches.
+*/
+function slackChannelRooms(rooms) {
+	const pick = (value, key) => value && typeof value === "object" && key in value ? { [key]: value[key] } : void 0;
+	return rooms.flatMap((room) => {
+		const bridges = slackBridges(room).map(({ content }) => ({ content: {
+			protocol: pick(content.protocol, "id"),
+			channel: pick(content.channel, "id"),
+			network: pick(content.network, "id"),
+			"com.beeper.room_type": content["com.beeper.room_type"],
+			"com.beeper.room_type.v2": content["com.beeper.room_type.v2"]
+		} }));
+		return bridges.length ? [{
+			...room,
+			bridges
+		}] : [];
+	});
+}
 function slackAddress(bridges) {
 	for (const { content } of bridges) {
 		const channel = content.channel;
@@ -512,6 +532,59 @@ ${OWN_BUBBLE} .message-body :is(a, .room-mention) {
 }
 ${HERMES_CONTENT} ${MESSAGE_BODY} > .other-bubble { display: contents; }
 `;
+// src/launch-cache.ts
+var KEY = "launchWorkspace";
+var VERSION = 1;
+function isRecord(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isRoom(value) {
+	return isRecord(value) && typeof value.roomId === "string" && typeof value.name === "string" && Array.isArray(value.bridges) && value.bridges.every((bridge) => isRecord(bridge) && isRecord(bridge.content));
+}
+function readLaunchWorkspace(storage, account) {
+	const saved = storage.get(KEY);
+	if (!isRecord(saved) || saved.version !== VERSION || saved.account !== account) return null;
+	if (!Array.isArray(saved.rooms) || !saved.rooms.every(isRoom)) return null;
+	return {
+		account,
+		rooms: saved.rooms,
+		visibility: isRecord(saved.visibility) ? saved.visibility : null
+	};
+}
+/** Saves the workspace's rooms when they changed; returns the saved text. */
+function saveLaunchWorkspace(storage, { account, rooms, visibility }, previous) {
+	const saved = {
+		version: VERSION,
+		account,
+		rooms: slackChannelRooms(rooms),
+		visibility
+	};
+	const text = JSON.stringify(saved);
+	if (text !== previous) storage.set(KEY, saved);
+	return text;
+}
+/**
+* The rooms to build the workspace from while the room list is still Zami's saved one: the
+* rooms sync has delivered, and for the rest what was saved of them. `current` gives what
+* the saved room list does hold of a room (its name and account data), or null for a room
+* that's gone.
+*/
+function withSavedRooms(live, saved, current) {
+	const known = new Set(live.map(({ roomId }) => roomId));
+	const rooms = [...live];
+	for (const room of saved) {
+		if (known.has(room.roomId)) continue;
+		const now = current(room.roomId);
+		if (!now) continue;
+		const fresh = Object.fromEntries(Object.entries(now).filter(([, value]) => value !== void 0 && value !== null));
+		rooms.push({
+			...room,
+			...fresh,
+			bridges: room.bridges
+		});
+	}
+	return rooms;
+}
 // src/project-icon.ts
 var SVG_NS = "http://www.w3.org/2000/svg";
 var CUBE = "M12 3 3.5 7.75v8.5L12 21l8.5-4.75v-8.5L12 3Z M3.5 7.75 12 12.5l8.5-4.75 M12 12.5V21";
@@ -854,6 +927,10 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 	let stopped = false;
 	let queued = false;
 	let refresh = true;
+	let savedRooms;
+	let roomsToSave;
+	let saveTimer;
+	let savedText;
 	let app = null;
 	let main = null;
 	let nativeRail = null;
@@ -868,6 +945,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 	let lastLists;
 	let lastHomeTasks;
 	let lastChatHeading;
+	let markedReady = false;
 	const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
 		if (homeProfile && homeProfile.userId === auth.userId) return homeProfile.avatarUrl ?? void 0;
 	});
@@ -989,7 +1067,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		const project = data.today;
 		if (project?.id === roomId && state.activeRoomId === roomId && !state.showInbox && !state.showSpaceHome && !state.draftDm && mode === "leon" && followToday && composer?.isConnected && !stopped) return project;
 	}
-	const homeSend = messageModule && typeof messageModule.sendEventContent === "function" ? zami.patch.after(messageModule, "sendEventContent", (sent, [roomId, content]) => {
+	function followHomeSend(roomId, content, sent) {
 		if (!projectOpenInHome(roomId) || content.msgtype !== "m.text") return;
 		const relation = content["m.relates_to"];
 		if (relation?.rel_type === "m.thread" || relation?.rel_type === "m.replace") return;
@@ -1004,7 +1082,9 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 			choose(project, true);
 			if (history?.isConnected) history.scrollTop = history.scrollHeight;
 		}, () => {}).catch((error) => console.error("[leon] Failed to open today's chat after send", error));
-	}) : void 0;
+	}
+	const homeSend = messageModule && typeof messageModule.sendEventContent === "function" ? zami.patch.after(messageModule, "sendEventContent", (sent, [roomId, content]) => followHomeSend(roomId, content, sent)) : void 0;
+	const queuedHomeSend = typeof clientModule.sendOutboxMessage === "function" ? zami.patch.after(clientModule, "sendOutboxMessage", (sent, [roomId, content]) => followHomeSend(roomId, content, sent)) : void 0;
 	function registerHome() {
 		const home = zami.app.home;
 		if (!home) return;
@@ -1200,6 +1280,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		app?.removeAttribute("data-leon-ready");
 		app?.removeAttribute("data-leon-home");
 		app?.removeAttribute("data-leon-collapsed");
+		app?.removeAttribute("data-zami-launch-skip");
 		sidebar?.removeAttribute("data-leon-sidebar");
 		hiddenMenu?.removeAttribute("data-leon-hidden");
 		hiddenMenu = null;
@@ -1293,6 +1374,13 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		chatPresentation.setMessageRoom(hasChat && chat ? clientModule.getRoom(chat.id) : null, auth.userId, state.roomsTick);
 		if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
 		app.toggleAttribute("data-leon-ready", hasChat);
+		app.toggleAttribute("data-zami-launch-skip", custom && !(atHome && hasChat && composer));
+		if (!markedReady && hasChat && (!atHome || composer)) {
+			markedReady = true;
+			try {
+				performance.mark("leon:ready");
+			} catch {}
+		}
 		app.toggleAttribute("data-leon-home", atHome);
 		app.toggleAttribute("data-leon-collapsed", custom && !mobile && collapsed);
 		app.toggleAttribute("data-leon-mounted", custom);
@@ -1356,9 +1444,20 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 			refresh = true;
 		}
 		if (refresh) {
-			const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
-			const visibility = activeAccount ? readProjectVisibility(zam.matrix.getAccountData(PROJECT_VISIBILITY_ACCOUNT_DATA)) : null;
-			data = workspace(bridgedRooms, day, visibility);
+			let bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
+			let visibilityData = activeAccount ? zam.matrix.getAccountData(PROJECT_VISIBILITY_ACCOUNT_DATA) : null;
+			if (activeAccount && clientModule.isRoomListFromCache?.()) {
+				if (savedRooms?.account !== activeAccount) savedRooms = readLaunchWorkspace(zam.storage, activeAccount);
+				if (savedRooms) {
+					bridgedRooms = withSavedRooms(bridgedRooms, savedRooms.rooms, savedRoomNow);
+					visibilityData ??= savedRooms.visibility;
+				}
+			} else if (activeAccount && (auth.syncState === "SYNCING" || auth.syncState === "PREPARED")) saveRoomsSoon({
+				account: activeAccount,
+				rooms: bridgedRooms,
+				visibility: visibilityData
+			});
+			data = workspace(bridgedRooms, day, readProjectVisibility(visibilityData));
 			chatPresentation.refreshIssues();
 			if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) selectedProject = null;
 			refresh = false;
@@ -1366,6 +1465,29 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		if (mode === "leon") updateNavigation();
 		registerHome();
 		render();
+	}
+	/** What Zami's saved room list holds of a room the workspace was saved with. */
+	function savedRoomNow(roomId) {
+		if (!clientModule.getRoom(roomId)) return null;
+		return {
+			issueMetadata: zam.matrix.getAccountData(LINEAR_ISSUE_ACCOUNT_DATA, roomId),
+			projectMetadata: zam.matrix.getAccountData(PROJECT_APPEARANCE_ACCOUNT_DATA, roomId)
+		};
+	}
+	function saveRooms() {
+		clearTimeout(saveTimer);
+		saveTimer = void 0;
+		if (!roomsToSave) return;
+		try {
+			savedText = saveLaunchWorkspace(zam.storage, roomsToSave, savedText);
+		} catch (error) {
+			console.error("[leon] Failed to save the workspace for the next launch", error);
+		}
+		roomsToSave = void 0;
+	}
+	function saveRoomsSoon(rooms) {
+		roomsToSave = rooms;
+		saveTimer ??= setTimeout(saveRooms, 2e3);
 	}
 	function schedule(invalidateRooms = false) {
 		refresh ||= invalidateRooms;
@@ -1381,6 +1503,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		});
 	}
 	function checkDay() {
+		if (document.visibilityState === "hidden") saveRooms();
 		const next = projectDay();
 		if (next === day) return;
 		day = next;
@@ -1427,6 +1550,8 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		accountAvatar.dispose();
 		messageAvatar.dispose();
 		homeSend?.dispose();
+		queuedHomeSend?.dispose();
+		saveRooms();
 		preview?.dispose();
 		chatPresentation.dispose();
 		if (homeProfile) state.roomsTick++;

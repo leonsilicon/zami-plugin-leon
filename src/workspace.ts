@@ -130,6 +130,29 @@ function slackBridges(room: BridgedRoom) {
   });
 }
 
+/**
+ * The Slack channels among `rooms`, with only what `workspace` reads of their bridge state:
+ * small enough to keep between launches.
+ */
+export function slackChannelRooms(rooms: readonly BridgedRoom[]): BridgedRoom[] {
+  const pick = (value: unknown, key: string) =>
+    value && typeof value === "object" && key in value
+      ? { [key]: (value as Record<string, unknown>)[key] }
+      : undefined;
+  return rooms.flatMap((room) => {
+    const bridges = slackBridges(room).map(({ content }) => ({
+      content: {
+        protocol: pick(content.protocol, "id"),
+        channel: pick(content.channel, "id"),
+        network: pick(content.network, "id"),
+        "com.beeper.room_type": content["com.beeper.room_type"],
+        "com.beeper.room_type.v2": content["com.beeper.room_type.v2"],
+      },
+    }));
+    return bridges.length ? [{ ...room, bridges }] : [];
+  });
+}
+
 function slackAddress(bridges: BridgeState[]) {
   for (const { content } of bridges) {
     const channel = content.channel;

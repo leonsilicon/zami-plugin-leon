@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { composerPlaceholder, isMatrixPreview, issueForLink, messageAuthor } from "./src/chat.ts";
+import { readLaunchWorkspace, saveLaunchWorkspace, withSavedRooms } from "./src/launch-cache.ts";
 import { slackAccountAvatar } from "./src/slack-avatar.ts";
 import {
   projectDay,
@@ -400,6 +401,64 @@ void test("project labels show full names and format dates without shifting the 
   assert.equal(projectLabel("project-20261109"), "Nov 09");
   assert.equal(projectLabel("project-2026-11-20-2"), "Nov 20 (2)");
   assert.equal(projectLabel("project-2026-02-30"), "2026 02 30");
+});
+
+void test("the workspace opens from the rooms an earlier launch saved", () => {
+  const stored = new Map<string, unknown>();
+  const storage = {
+    get: (key: string) => stored.get(key),
+    set: (key: string, value: unknown) => void stored.set(key, structuredClone(value)),
+  };
+  const account = "@leon:beeper.com";
+  const today = room(`project-${day}`, "slackgo", {
+    channel: { id: "TWORK-CTODAY", displayname: "today" },
+    network: { id: "TWORK", displayname: "Work" },
+    "com.beeper.room_type": "default",
+  });
+  const issue = issueRoom("leon-440-reply-to");
+  const saved = saveLaunchWorkspace(storage, {
+    account,
+    rooms: [today, issue, room("whatsapp-chat", "whatsapp")],
+    visibility: null,
+  });
+  // Unchanged rooms aren't written again.
+  stored.clear();
+  assert.equal(
+    saveLaunchWorkspace(storage, { account, rooms: [today, issue], visibility: null }, saved),
+    saved,
+  );
+  assert.equal(stored.size, 0);
+  saveLaunchWorkspace(storage, { account, rooms: [today, issue], visibility: null });
+
+  assert.equal(readLaunchWorkspace(storage, "@other:beeper.com"), null);
+  const launch = readLaunchWorkspace(storage, account);
+  assert.ok(launch);
+  // Only what the workspace reads of a Slack channel's bridge is kept.
+  assert.deepEqual(
+    launch.rooms.map(({ roomId }) => roomId),
+    [today.roomId, issue.roomId],
+  );
+  assert.deepEqual(launch.rooms[0]?.bridges[0]?.content.channel, { id: "TWORK-CTODAY" });
+
+  // At launch the saved room list has no bridge state: sync has delivered no room yet.
+  const done = { ...issue.issueMetadata, statusName: "Done", statusType: "completed" };
+  const rooms = withSavedRooms([], launch.rooms, (roomId) =>
+    roomId === issue.roomId ? { issueMetadata: done } : { issueMetadata: null },
+  );
+  const data = workspace(rooms, day);
+  assert.equal(data.today?.id, today.roomId);
+  // What the room list does hold (an issue's account data) is as it is now.
+  assert.deepEqual(data.awaiting, []);
+
+  // A room sync has delivered is read live, and one that's gone isn't shown.
+  const live = { ...today, name: `project-${day}-2` };
+  const merged = withSavedRooms([live], launch.rooms, (roomId) =>
+    roomId === issue.roomId ? null : {},
+  );
+  assert.deepEqual(merged, [live]);
+
+  stored.set("launchWorkspace", { version: 1, account, rooms: [{ roomId: 1 }] });
+  assert.equal(readLaunchWorkspace(storage, account), null);
 });
 
 void test("the repo index points to a self-contained Zami plugin bundle", async () => {

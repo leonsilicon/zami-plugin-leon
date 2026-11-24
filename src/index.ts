@@ -7,6 +7,12 @@ import {
   issueTitle,
   MESSAGE_STYLES,
 } from "./chat.ts";
+import {
+  readLaunchWorkspace,
+  saveLaunchWorkspace,
+  withSavedRooms,
+  type LaunchWorkspace,
+} from "./launch-cache.ts";
 import { projectIcon } from "./project-icon.ts";
 import { BRIDGE_ACCOUNT_DATA, slackAccountAvatar } from "./slack-avatar.ts";
 import { installTaskSummary, TASK_SUMMARY_STYLES } from "./task-summary.ts";
@@ -302,6 +308,11 @@ function install(
   let stopped = false;
   let queued = false;
   let refresh = true;
+  // The workspace's rooms as an earlier launch left them (launch-cache.ts).
+  let savedRooms: LaunchWorkspace | null | undefined;
+  let roomsToSave: LaunchWorkspace | undefined;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let savedText: string | undefined;
 
   let app: HTMLElement | null = null;
   let main: HTMLElement | null = null;
@@ -317,6 +328,7 @@ function install(
   let lastLists: string | undefined;
   let lastHomeTasks: string | undefined;
   let lastChatHeading: string | undefined;
+  let markedReady = false;
 
   const accountAvatar = zami.patch.after(clientModule, "getOwnAvatarUrl", () => {
     if (homeProfile && homeProfile.userId === auth.userId)
@@ -509,37 +521,46 @@ function install(
     }
   }
 
+  // Sending from Home opens today's chat once the message is on its way: one sent directly,
+  // and one Zami's outbox held until sync delivered the room (a launch's first moments).
+  function followHomeSend(roomId: string, content: Record<string, unknown>, sent: Promise<string>) {
+    if (!projectOpenInHome(roomId) || content.msgtype !== "m.text") return;
+    const relation = content["m.relates_to"] as { rel_type?: unknown } | undefined;
+    if (relation?.rel_type === "m.thread" || relation?.rel_type === "m.replace") return;
+    const visit = homeVisit;
+    const sendingAccount = auth.userId;
+    const sendingClient = zam.unsafe.getClient();
+    void sent
+      .then(
+        () => {
+          if (
+            homeVisit !== visit ||
+            auth.userId !== sendingAccount ||
+            zam.unsafe.getClient() !== sendingClient
+          )
+            return;
+          const project = projectOpenInHome(roomId);
+          if (!project) return;
+          const history = timeline;
+          choose(project, true);
+          // The composer tried to scroll while Home still hid the timeline.
+          if (history?.isConnected) history.scrollTop = history.scrollHeight;
+        },
+        () => {},
+      )
+      .catch((error) => console.error("[leon] Failed to open today's chat after send", error));
+  }
   const homeSend =
     messageModule && typeof messageModule.sendEventContent === "function"
-      ? zami.patch.after(messageModule, "sendEventContent", (sent, [roomId, content]) => {
-          if (!projectOpenInHome(roomId) || content.msgtype !== "m.text") return;
-          const relation = content["m.relates_to"] as { rel_type?: unknown } | undefined;
-          if (relation?.rel_type === "m.thread" || relation?.rel_type === "m.replace") return;
-          const visit = homeVisit;
-          const sendingAccount = auth.userId;
-          const sendingClient = zam.unsafe.getClient();
-          void sent
-            .then(
-              () => {
-                if (
-                  homeVisit !== visit ||
-                  auth.userId !== sendingAccount ||
-                  zam.unsafe.getClient() !== sendingClient
-                )
-                  return;
-                const project = projectOpenInHome(roomId);
-                if (!project) return;
-                const history = timeline;
-                choose(project, true);
-                // The composer tried to scroll while Home still hid the timeline.
-                if (history?.isConnected) history.scrollTop = history.scrollHeight;
-              },
-              () => {},
-            )
-            .catch((error) =>
-              console.error("[leon] Failed to open today's chat after send", error),
-            );
-        })
+      ? zami.patch.after(messageModule, "sendEventContent", (sent, [roomId, content]) =>
+          followHomeSend(roomId, content, sent),
+        )
+      : undefined;
+  const queuedHomeSend =
+    typeof clientModule.sendOutboxMessage === "function"
+      ? zami.patch.after(clientModule, "sendOutboxMessage", (sent, [roomId, content]) =>
+          followHomeSend(roomId, content, sent),
+        )
       : undefined;
 
   // Zami opens on today's project: it shows the room as it last looked the moment the app
@@ -779,6 +800,7 @@ function install(
     app?.removeAttribute("data-leon-ready");
     app?.removeAttribute("data-leon-home");
     app?.removeAttribute("data-leon-collapsed");
+    app?.removeAttribute("data-zami-launch-skip");
     sidebar?.removeAttribute("data-leon-sidebar");
     hiddenMenu?.removeAttribute("data-leon-hidden");
     hiddenMenu = null;
@@ -903,6 +925,18 @@ function install(
     );
     if (sidebar?.parentElement === app) sidebar.dataset.leonSidebar = "";
     app.toggleAttribute("data-leon-ready", hasChat);
+    // Zami saves what the app shows for the next launch to open on, and that's Home: the
+    // open chat of today's project isn't it, nor is Home before it has its composer.
+    app.toggleAttribute("data-zami-launch-skip", custom && !(atHome && hasChat && composer));
+    if (!markedReady && hasChat && (!atHome || composer)) {
+      // On the performance timeline next to Zam's own `zam-boot:` marks.
+      markedReady = true;
+      try {
+        performance.mark("leon:ready");
+      } catch {
+        // No User Timing API.
+      }
+    }
     app.toggleAttribute("data-leon-home", atHome);
     app.toggleAttribute("data-leon-collapsed", custom && !mobile && collapsed);
     app.toggleAttribute("data-leon-mounted", custom);
@@ -986,11 +1020,22 @@ function install(
       refresh = true;
     }
     if (refresh) {
-      const bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
-      const visibility = activeAccount
-        ? readProjectVisibility(zam.matrix.getAccountData(PROJECT_VISIBILITY_ACCOUNT_DATA))
+      let bridgedRooms = activeAccount ? readRooms(zam.matrix, clientModule) : [];
+      let visibilityData = activeAccount
+        ? zam.matrix.getAccountData(PROJECT_VISIBILITY_ACCOUNT_DATA)
         : null;
-      data = workspace(bridgedRooms, day, visibility);
+      if (activeAccount && clientModule.isRoomListFromCache?.()) {
+        // Sync hasn't delivered every room yet: the rest are as they were last saved.
+        if (savedRooms?.account !== activeAccount)
+          savedRooms = readLaunchWorkspace(zam.storage, activeAccount);
+        if (savedRooms) {
+          bridgedRooms = withSavedRooms(bridgedRooms, savedRooms.rooms, savedRoomNow);
+          visibilityData ??= savedRooms.visibility;
+        }
+      } else if (activeAccount && (auth.syncState === "SYNCING" || auth.syncState === "PREPARED")) {
+        saveRoomsSoon({ account: activeAccount, rooms: bridgedRooms, visibility: visibilityData });
+      }
+      data = workspace(bridgedRooms, day, readProjectVisibility(visibilityData));
       chatPresentation.refreshIssues();
       if (selectedProject && !data.projects.some(({ id }) => id === selectedProject)) {
         selectedProject = null;
@@ -1000,6 +1045,32 @@ function install(
     if (mode === "leon") updateNavigation();
     registerHome();
     render();
+  }
+
+  /** What Zami's saved room list holds of a room the workspace was saved with. */
+  function savedRoomNow(roomId: string) {
+    if (!clientModule.getRoom(roomId)) return null;
+    return {
+      issueMetadata: zam.matrix.getAccountData(LINEAR_ISSUE_ACCOUNT_DATA, roomId),
+      projectMetadata: zam.matrix.getAccountData(PROJECT_APPEARANCE_ACCOUNT_DATA, roomId),
+    };
+  }
+
+  function saveRooms() {
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    if (!roomsToSave) return;
+    try {
+      savedText = saveLaunchWorkspace(zam.storage, roomsToSave, savedText);
+    } catch (error) {
+      console.error("[leon] Failed to save the workspace for the next launch", error);
+    }
+    roomsToSave = undefined;
+  }
+
+  function saveRoomsSoon(rooms: LaunchWorkspace) {
+    roomsToSave = rooms;
+    saveTimer ??= setTimeout(saveRooms, 2000);
   }
 
   function schedule(invalidateRooms = false) {
@@ -1018,6 +1089,8 @@ function install(
   }
 
   function checkDay() {
+    // Leaving the app: what it shows now is what the next launch opens on.
+    if (document.visibilityState === "hidden") saveRooms();
     const next = projectDay();
     if (next === day) return;
     day = next;
@@ -1080,6 +1153,8 @@ function install(
     accountAvatar.dispose();
     messageAvatar.dispose();
     homeSend?.dispose();
+    queuedHomeSend?.dispose();
+    saveRooms();
     preview?.dispose();
     chatPresentation.dispose();
     if (homeProfile) state.roomsTick++;

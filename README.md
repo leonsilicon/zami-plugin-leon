@@ -11,7 +11,7 @@ A Zami plugin that optimizes the UI for how Leon uses Slack.
 ## Use
 
 - **Home** lists **Awaiting Leon** issues from urgent to low priority, with unprioritized issues last. Pick an issue to open its Slack chat. Sending a text message from the composer opens today's project chat once the send succeeds. **More** opens that room's options.
-- The plugin registers today's channel as Zami's [home](https://github.com/leonsilicon/Zami/tree/trunk/packages/com/leonsilicon/zami/plugins#home-and-the-launch-page). The date follows Toronto time. When Beeper is still syncing the channel, its composer appears as soon as it arrives. **Original Zami** opens where you left it.
+- The plugin registers today's channel as Zami's [home](https://github.com/leonsilicon/Zami/tree/trunk/packages/com/leonsilicon/zami/plugins#home-and-startup). The date follows Toronto time. Home and its composer are there as Zami opens, before Beeper has synced: Zami draws Home as you left it, and a message you send right away waits above the composer until the channel has synced. **Original Zami** opens where you left it.
 - The **Awaiting Leon** sidebar groups issues under **Unread** and **Read** and sorts each group from urgent to low priority, with unprioritized issues last. Pick an issue to open its Slack chat. The number on the hamburger counts all awaiting issues.
 - Linear task chats show the issue ID, priority, status, and title in the header. At the start of the chat, the synced issue summary takes the place of the welcome banner. Slack chat headers hide the lock and call icons in the Leon workspace.
 - In the Leon workspace, your messages sit in right-aligned bubbles. Other Slack bots use left-aligned bubbles with a small sender avatar. Hermes messages use the full chat width without a bubble. The layout also applies inside threads.
@@ -26,6 +26,8 @@ The plugin reads joined Slack rooms through Beeper. `slack22linear` publishes is
 Manual section moves and archived rooms with stale membership state in Beeper can differ from the sidebar.
 
 The rail uses `#project-…` Slack channels as Linear projects. The Beeper inbox publishes project colors and icons as Matrix room account data and closed project channels as account-wide Matrix data on Leon's account. While the first snapshot syncs, the rail uses Beeper's archive tags and hides past daily projects. Dailylinear provisions today's channel. Chat and delivery use Zami's existing Beeper session.
+
+The plugin keeps each Slack channel's name, bridge address, and issue and project details on this device between launches. Zami's own saved room list has no bridge details, so without them Home would wait for Beeper to sync before it knew today's channel.
 
 ## Develop
 
