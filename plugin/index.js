@@ -4,10 +4,7 @@ var AWAITING = "Awaiting Leon";
 var LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
 var PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
 var TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
-var TOPIC_SEPARATOR = " · ";
-var LINEAR_WORKFLOW = /^linear:v1 ([a-z_]+) (#[\da-f]{6}|-)(?: p([0-4]))?(?: |$)/i;
 var LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
-var SLACK_LINK = /^<([^|<>\s]+)(?:\|[^<>]+)?>$/;
 var CLOSED_STATUS_TYPES = /* @__PURE__ */ new Set([
 	"completed",
 	"canceled",
@@ -122,34 +119,16 @@ function readProjectVisibility(room, readMessages) {
 }
 function issueFromAccountData(name, address, metadata) {
 	const identifier = issueChannel(name)?.identifier;
-	if (!address || !identifier || metadata?.version !== 1 || metadata.channelId !== address.channelId || typeof metadata.identifier !== "string" || metadata.identifier.toLowerCase() !== identifier) return void 0;
+	if (!address || !identifier || metadata?.version !== 1 || metadata.channelId !== address.channelId || typeof metadata.identifier !== "string" || metadata.identifier.toLowerCase() !== identifier) return null;
 	if (metadata.deleted === true) return null;
 	const { title, priority, statusName, statusType, statusColor, url } = metadata;
-	if (typeof title !== "string" || !title.trim() || typeof statusName !== "string" || !statusName.trim() || typeof statusType !== "string" || !/^[a-z_]+$/i.test(statusType) || typeof url !== "string" || linearIssueIdentifier(url) !== identifier) return void 0;
+	if (typeof title !== "string" || !title.trim() || typeof statusName !== "string" || !statusName.trim() || typeof statusType !== "string" || !/^[a-z_]+$/i.test(statusType) || typeof url !== "string" || linearIssueIdentifier(url) !== identifier) return null;
 	return {
 		title,
 		priority: typeof priority === "number" && /^[0-4]$/.test(String(priority)) ? priority : null,
 		statusName,
 		statusType: statusType.toLowerCase(),
 		statusColor: typeof statusColor === "string" && /^#[a-f0-9]{6}$/i.test(statusColor) ? statusColor : null
-	};
-}
-function linearIssue(name, topic) {
-	const identifier = issueChannel(name)?.identifier;
-	if (!identifier || !topic) return null;
-	const [status, workflow, link, ...titleParts] = topic.split(TOPIC_SEPARATOR);
-	const [, type, color, priority] = workflow?.match(LINEAR_WORKFLOW) ?? [];
-	const url = link?.match(SLACK_LINK)?.[1] ?? link;
-	const linkedIssue = url && linearIssueIdentifier(url);
-	const statusName = status?.trim();
-	const title = titleParts.join(TOPIC_SEPARATOR).trim();
-	if (!statusName || !type || !color || !title || linkedIssue !== identifier) return null;
-	return {
-		title,
-		priority: priority === void 0 ? null : Number(priority),
-		statusName,
-		statusType: type.toLowerCase(),
-		statusColor: color === "-" ? null : color
 	};
 }
 function projectAppearance(topic) {
@@ -170,8 +149,7 @@ function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 		const name = channelName(room.name);
 		if (name === "zami-project-visibility") continue;
 		const address = slackAddress(bridges);
-		const fromAccountData = issueFromAccountData(name, address, room.issueMetadata);
-		const issue = fromAccountData === void 0 ? linearIssue(name, room.topic) : fromAccountData;
+		const issue = issueFromAccountData(name, address, room.issueMetadata);
 		const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
 		const channel = {
 			id: room.roomId,

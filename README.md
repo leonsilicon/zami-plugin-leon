@@ -21,9 +21,9 @@ A Zami plugin that optimizes the UI for how Leon uses Slack.
 
 ## Data
 
-The plugin reads joined Slack rooms through Beeper. Linear Sync publishes issue titles, status, color, priority, and dates in Matrix room account data on Leon's Beeper account. Home lists issues marked **Awaiting Leon**. Cached Slack topics provide issue details for rooms that have yet to receive account data.
+The plugin reads joined Slack rooms through Beeper. Linear Sync publishes issue titles, status, color, priority, and dates in Matrix room account data on Leon's Beeper account. Home lists issues marked **Awaiting Leon**. Issue details appear as soon as the room account data arrives.
 
-Manual section moves and archived rooms with stale topic or membership state in Beeper can differ from the sidebar.
+Manual section moves and archived rooms with stale membership state in Beeper can differ from the sidebar.
 
 The rail uses `#project-…` Slack channels as Linear projects. Linear Slack Sync appends the project color and icon to the channel topic and publishes closed channel IDs in the private `#zami-project-visibility` channel. The plugin reads that channel through Beeper and hides closed Linear projects, Slack archives, and projects archived in Beeper. While the first status snapshot syncs, the rail uses Beeper's archive tags and hides past daily projects. Dailylinear provisions today's channel. Chat and delivery use Zami's existing Beeper session.
 

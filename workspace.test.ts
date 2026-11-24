@@ -63,13 +63,31 @@ function room(
   };
 }
 
+function issueRoom(name: string, metadata: Record<string, unknown> = {}): BridgedRoom {
+  const identifier = /leon-\d+/i.exec(name)![0].toUpperCase();
+  const channelId = "C" + identifier.replace("-", "");
+  return {
+    ...room(name, null, "slackgo", { channel: { id: `TWORK-${channelId}` } }),
+    issueMetadata: {
+      version: 1,
+      identifier,
+      channelId,
+      title: "Example issue",
+      statusName: "Awaiting Leon",
+      statusType: "started",
+      statusColor: "#f2c94c",
+      priority: 0,
+      url: `https://linear.app/team/issue/${identifier}`,
+      ...metadata,
+    },
+  };
+}
+
 void test("Slack channel links use synced issue details and fall back to the channel slug", () => {
-  const issue = room(
-    "##leon-440-reply-to",
-    "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-440 · Reply to Farhan Shaikh `{start: 2026-11-22}`",
-    "slackgo",
-    { channel: { id: "TWORK-CISSUE" } },
-  );
+  const issue = issueRoom("##leon-440-reply-to", {
+    title: "Reply to Farhan Shaikh",
+    priority: 2,
+  });
   const data = workspace([issue, room("general")], day);
   const matrixLink = "https://matrix.to/#/!issue:beeper.com";
   const targets = new Map<string, MatrixLink>([
@@ -99,8 +117,8 @@ void test("Slack channel links use synced issue details and fall back to the cha
     statusColor: "#f2c94c",
   };
   assert.deepEqual(resolve(matrixLink), synced);
-  assert.deepEqual(resolve("https://leon.slack.com/archives/CISSUE", ""), synced);
-  assert.deepEqual(resolve("https://app.slack.com/client/TWORK/CISSUE"), synced);
+  assert.deepEqual(resolve("https://leon.slack.com/archives/CLEON440", ""), synced);
+  assert.deepEqual(resolve("https://app.slack.com/client/TWORK/CLEON440"), synced);
   assert.equal(
     resolve("matrix:roomid/other:beeper.com", "#leon-443-recurring-sleep-task")?.title,
     "Recurring sleep task",
@@ -108,8 +126,8 @@ void test("Slack channel links use synced issue details and fall back to the cha
   assert.equal(resolve("matrix:roomid/general:beeper.com"), undefined);
   assert.equal(resolve("matrix:roomid/native:example.org"), undefined);
   assert.equal(resolve("matrix:roomid/issue:beeper.com/e/test"), undefined);
-  assert.equal(resolve("https://leon.slack.com/archives/CISSUE/p123"), undefined);
-  assert.equal(resolve("https://leon.slack.com.example.org/archives/CISSUE"), undefined);
+  assert.equal(resolve("https://leon.slack.com/archives/CLEON440/p123"), undefined);
+  assert.equal(resolve("https://leon.slack.com.example.org/archives/CLEON440"), undefined);
 });
 
 void test("Matrix web previews are suppressed without matching other sites", () => {
@@ -137,25 +155,22 @@ void test("chat distinguishes Hermes, other Slack bots, and people", () => {
   assert.equal(messageAuthor("@person:example.org", ownUserId, "Someone (Slack)"), undefined);
 });
 
-void test("Home uses the synced Linear status and excludes stale or unrelated Slack topics", () => {
-  const topic = (number: number, status = "Awaiting Leon", type = "started") =>
-    `${status} · linear:v1 ${type} #f2c94c · https://linear.app/team/issue/LEON-${number} · Example issue`;
+void test("Home uses Matrix status for matching Slack issue rooms", () => {
   const data = workspace(
     [
-      room("leon-12-review", topic(12)),
-      room("#leon-2-invoice", topic(2)),
-      room("leon-3-start", topic(3, "Awaiting Start")),
-      room("leon-4-clarify", topic(4, "Awaiting Leon Again")),
-      room("leon-5-no-topic", null),
-      room("leon-6-sms", topic(6), "sms"),
-      room("leon-7-dm", topic(7), "slack", { "com.beeper.room_type": "dm" }),
-      room("leon-8-completed", topic(8, "Awaiting Leon", "completed")),
-      room("leon-9-canceled", "Awaiting Leon · https://linear.app/team/issue/LEON-9/canceled"),
-      room("leon-10-wrong-link", topic(90)),
-      room("leon-11-label-only", "Awaiting Leon"),
-      room("leon-lounge", topic(14)),
-      room("general", topic(15)),
-      room("project-demo", topic(16)),
+      issueRoom("leon-12-review"),
+      issueRoom("#leon-2-invoice"),
+      issueRoom("leon-3-start", { statusName: "Awaiting Start" }),
+      issueRoom("leon-4-clarify", { statusName: "Awaiting Leon Again" }),
+      room("leon-5-no-metadata"),
+      room("leon-6-sms", null, "sms"),
+      room("leon-7-dm", null, "slack", { "com.beeper.room_type": "dm" }),
+      issueRoom("leon-8-completed", { statusType: "completed" }),
+      issueRoom("leon-9-canceled", { statusType: "canceled" }),
+      issueRoom("leon-10-wrong-link", { url: "https://linear.app/team/issue/LEON-90" }),
+      room("leon-lounge"),
+      room("general"),
+      room("project-demo"),
     ],
     day,
   );
@@ -174,62 +189,47 @@ void test("Home uses the synced Linear status and excludes stale or unrelated Sl
   assert.equal(data.channels.has("!leon-9-canceled"), true);
 });
 
-void test("Matrix issue metadata overrides a stale topic and deleted issues stay hidden", () => {
-  const legacyTopic =
-    "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-12 · Short";
-  const task = room("leon-12-review", legacyTopic, "slackgo", {
-    channel: { id: "TWORK-CISSUE" },
-  });
-  const details = {
-    version: 1,
-    channelId: "CISSUE",
-    identifier: "LEON-12",
+void test("Issue rooms ignore Slack topics and update when Matrix account data arrives", () => {
+  const task = issueRoom("leon-12-review", {
     title: "Full title ".repeat(30).trim(),
-    statusName: "Awaiting Hermes",
-    statusType: "started",
-    statusColor: "#bec2c8",
     priority: 1,
-    url: "https://linear.app/team/issue/LEON-12",
-  };
-  let data = workspace([{ ...task, issueMetadata: details }], day);
-  assert.equal(data.channels.get(task.roomId)?.issue?.title, details.title);
-  assert.deepEqual(data.awaiting, []);
-  data = workspace(
-    [{ ...task, topic: null, issueMetadata: { ...details, statusName: "Awaiting Leon" } }],
+  });
+  task.topic =
+    "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-12 · Stale topic";
+  const details = task.issueMetadata!;
+
+  for (const issueMetadata of [
+    null,
+    { ...details, channelId: "CWRONG" },
+    { ...details, deleted: true },
+  ]) {
+    const data = workspace([{ ...task, issueMetadata }], day);
+    assert.equal(data.channels.get(task.roomId)?.issue, undefined);
+    assert.deepEqual(data.awaiting, []);
+  }
+
+  const data = workspace([task], day);
+  assert.equal(data.awaiting[0]?.issue?.title, details.title);
+  assert.equal(data.awaiting[0]?.issue?.priority, 1);
+  const moved = workspace(
+    [{ ...task, issueMetadata: { ...details, statusName: "Awaiting Hermes" } }],
     day,
   );
-  assert.equal(data.awaiting[0]?.issue?.priority, 1);
-  data = workspace([{ ...task, issueMetadata: { ...details, deleted: true } }], day);
-  assert.equal(data.channels.get(task.roomId)?.issue, undefined);
-  assert.deepEqual(data.awaiting, []);
-  data = workspace([{ ...task, issueMetadata: { ...details, channelId: "CWRONG" } }], day);
-  assert.equal(data.awaiting[0]?.issue?.title, "Short");
+  assert.deepEqual(moved.awaiting, []);
 });
 
 void test("issue rows read the synced title, priority, and status appearance", () => {
   const data = workspace(
     [
-      room(
-        "leon-4-cancel-fongo",
-        'Awaiting Leon · linear:v1 started #f2c94c p2 {"due":"2026-12-01"} · https://linear.app/team/issue/LEON-4 · Cancel Fongo Works · Montréal',
-        "slackgo",
-      ),
-      room(
-        "leon-5-done",
-        "Done · linear:v1 completed #5e6ad2 p1 · https://linear.app/team/issue/LEON-5 · Done item",
-      ),
-      room(
-        "leon-6-legacy",
-        "Awaiting Leon · linear:v1 unstarted #f2c94c · <https://linear.app/team/issue/LEON-6/previously-synced-title> · Previously synced title",
-      ),
-      room(
-        "leon-7-no-priority",
-        "Awaiting Leon · linear:v1 started #f2c94c p0 · https://linear.app/team/issue/LEON-7 · No priority yet",
-      ),
-      room(
-        "leon-8-invalid",
-        "Awaiting Leon · linear:v1 started #f2c94c p20 · https://linear.app/team/issue/LEON-8 · Malformed priority",
-      ),
+      issueRoom("leon-4-cancel-fongo", { title: "Cancel Fongo Works · Montréal", priority: 2 }),
+      issueRoom("leon-5-done", { title: "Done item", statusType: "completed", priority: 1 }),
+      issueRoom("leon-6-unprioritized", {
+        title: "Unprioritized item",
+        statusType: "unstarted",
+        priority: null,
+      }),
+      issueRoom("leon-7-no-priority", { title: "No priority yet" }),
+      issueRoom("leon-8-invalid", { title: "Malformed priority", priority: 20 }),
     ],
     day,
   );
@@ -244,7 +244,7 @@ void test("issue rows read the synced title, priority, and status appearance", (
         statusColor: "#f2c94c",
       },
       {
-        title: "Previously synced title",
+        title: "Unprioritized item",
         priority: null,
         statusName: "Awaiting Leon",
         statusType: "unstarted",
@@ -270,21 +270,16 @@ void test("issue rows read the synced title, priority, and status appearance", (
 
 void test("awaiting issues sort by Linear priority, then issue number", () => {
   const issues = [
-    { number: 1, priority: " p4" },
-    { number: 2, priority: " p0" },
-    { number: 3, priority: " p3" },
-    { number: 21, priority: " p2" },
-    { number: 5, priority: "" },
-    { number: 6, priority: " p1" },
-    { number: 7, priority: " p2" },
+    { number: 1, priority: 4 },
+    { number: 2, priority: 0 },
+    { number: 3, priority: 3 },
+    { number: 21, priority: 2 },
+    { number: 5, priority: null },
+    { number: 6, priority: 1 },
+    { number: 7, priority: 2 },
   ];
   const { awaiting } = workspace(
-    issues.map(({ number, priority }) =>
-      room(
-        `leon-${number}-example`,
-        `Awaiting Leon · linear:v1 started -${priority} · https://linear.app/team/issue/LEON-${number} · Example issue`,
-      ),
-    ),
+    issues.map(({ number, priority }) => issueRoom(`leon-${number}-example`, { priority })),
     day,
   );
 

@@ -35,10 +35,7 @@ export const LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
 export const PROJECT_VISIBILITY_CHANNEL = "zami-project-visibility";
 const PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
 const TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
-const TOPIC_SEPARATOR = " · ";
-const LINEAR_WORKFLOW = /^linear:v1 ([a-z_]+) (#[\da-f]{6}|-)(?: p([0-4]))?(?: |$)/i;
 const LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
-const SLACK_LINK = /^<([^|<>\s]+)(?:\|[^<>]+)?>$/;
 const CLOSED_STATUS_TYPES = new Set(["completed", "canceled", "duplicate"]);
 const PROJECT = /^project-[a-z0-9_-]+$/;
 const PROJECT_TOPIC_SUFFIX =
@@ -170,7 +167,7 @@ function issueFromAccountData(
   name: string,
   address: ReturnType<typeof slackAddress>,
   metadata: BridgedRoom["issueMetadata"],
-): IssueDetails | null | undefined {
+): IssueDetails | null {
   const identifier = issueChannel(name)?.identifier;
   if (
     !address ||
@@ -180,7 +177,7 @@ function issueFromAccountData(
     typeof metadata.identifier !== "string" ||
     metadata.identifier.toLowerCase() !== identifier
   )
-    return undefined;
+    return null;
   if (metadata.deleted === true) return null;
   const { title, priority, statusName, statusType, statusColor, url } = metadata;
   if (
@@ -193,7 +190,7 @@ function issueFromAccountData(
     typeof url !== "string" ||
     linearIssueIdentifier(url) !== identifier
   )
-    return undefined;
+    return null;
   return {
     title,
     priority: typeof priority === "number" && /^[0-4]$/.test(String(priority)) ? priority : null,
@@ -201,28 +198,6 @@ function issueFromAccountData(
     statusType: statusType.toLowerCase(),
     statusColor:
       typeof statusColor === "string" && /^#[a-f0-9]{6}$/i.test(statusColor) ? statusColor : null,
-  };
-}
-
-function linearIssue(name: string, topic: string | null): IssueDetails | null {
-  const identifier = issueChannel(name)?.identifier;
-  if (!identifier || !topic) return null;
-  const [status, workflow, link, ...titleParts] = topic.split(TOPIC_SEPARATOR);
-
-  // Archived Slack channels can keep their old, unversioned topic indefinitely.
-  // Linear Sync puts the title last so it can contain the topic separator.
-  const [, type, color, priority] = workflow?.match(LINEAR_WORKFLOW) ?? [];
-  const url = link?.match(SLACK_LINK)?.[1] ?? link;
-  const linkedIssue = url && linearIssueIdentifier(url);
-  const statusName = status?.trim();
-  const title = titleParts.join(TOPIC_SEPARATOR).trim();
-  if (!statusName || !type || !color || !title || linkedIssue !== identifier) return null;
-  return {
-    title,
-    priority: priority === undefined ? null : Number(priority),
-    statusName,
-    statusType: type.toLowerCase(),
-    statusColor: color === "-" ? null : color,
   };
 }
 
@@ -246,8 +221,7 @@ export function workspace(
     const name = channelName(room.name);
     if (name === PROJECT_VISIBILITY_CHANNEL) continue;
     const address = slackAddress(bridges);
-    const fromAccountData = issueFromAccountData(name, address, room.issueMetadata);
-    const issue = fromAccountData === undefined ? linearIssue(name, room.topic) : fromAccountData;
+    const issue = issueFromAccountData(name, address, room.issueMetadata);
     const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
     const channel = { id: room.roomId, name, ...(issue && { issue }), ...(project && { project }) };
     channels.set(channel.id, channel);
