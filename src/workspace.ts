@@ -23,8 +23,8 @@ interface IssueDetails {
 export interface BridgedRoom {
   roomId: string;
   name: string;
-  topic: string | null;
   issueMetadata?: Record<string, unknown> | null;
+  projectMetadata?: Record<string, unknown> | null;
   bridges: BridgeState[];
   isSpace?: boolean;
   archived?: boolean;
@@ -32,13 +32,12 @@ export interface BridgedRoom {
 
 export const AWAITING = "Awaiting Leon";
 export const LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
+export const PROJECT_APPEARANCE_ACCOUNT_DATA = "ai.leonsilicon.linear.project";
 export const PROJECT_VISIBILITY_ACCOUNT_DATA = "ai.leonsilicon.linear.project_visibility";
 const TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
 const LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
 const CLOSED_STATUS_TYPES = new Set(["completed", "canceled", "duplicate"]);
 const PROJECT = /^project-[a-z0-9_-]+$/;
-const PROJECT_TOPIC_SUFFIX =
-  /(?:^| · )\[linear-project:v1 (#[\da-f]{6}|-)(?: ([^[\]\r\n]{1,80}))?\]$/i;
 const TORONTO = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Toronto",
   year: "numeric",
@@ -205,9 +204,22 @@ function issueFromAccountData(
   };
 }
 
-function projectAppearance(topic: string | null): ProjectAppearance {
-  const [, color, icon] = topic?.match(PROJECT_TOPIC_SUFFIX) ?? [];
-  return { color: color === "-" ? null : (color ?? null), icon: icon ?? null };
+function projectAppearance(
+  address: ReturnType<typeof slackAddress>,
+  metadata: BridgedRoom["projectMetadata"],
+): ProjectAppearance {
+  if (
+    !address ||
+    metadata?.version !== 1 ||
+    metadata.teamId !== address.team ||
+    metadata.channelId !== address.channelId
+  )
+    return { color: null, icon: null };
+  const { color, icon } = metadata;
+  return {
+    color: typeof color === "string" && /^#[a-f0-9]{6}$/i.test(color) ? color : null,
+    icon: typeof icon === "string" ? icon.trim() || null : null,
+  };
 }
 
 export function workspace(
@@ -225,7 +237,7 @@ export function workspace(
     const name = channelName(room.name);
     const address = slackAddress(bridges);
     const issue = issueFromAccountData(name, address, room.issueMetadata);
-    const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
+    const project = PROJECT.test(name) ? projectAppearance(address, room.projectMetadata) : null;
     const channel = { id: room.roomId, name, ...(issue && { issue }), ...(project && { project }) };
     channels.set(channel.id, channel);
     if (TASK.test(name)) {

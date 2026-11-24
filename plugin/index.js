@@ -2,6 +2,7 @@
 // src/workspace.ts
 var AWAITING = "Awaiting Leon";
 var LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
+var PROJECT_APPEARANCE_ACCOUNT_DATA = "ai.leonsilicon.linear.project";
 var PROJECT_VISIBILITY_ACCOUNT_DATA = "ai.leonsilicon.linear.project_visibility";
 var TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
 var LINEAR_ISSUE = /^https:\/\/linear\.app\/[^/<>\s]+\/issue\/(leon-\d+)(?:[/?#][^<>\s]*)?$/i;
@@ -11,7 +12,6 @@ var CLOSED_STATUS_TYPES = /* @__PURE__ */ new Set([
 	"duplicate"
 ]);
 var PROJECT = /^project-[a-z0-9_-]+$/;
-var PROJECT_TOPIC_SUFFIX = /(?:^| · )\[linear-project:v1 (#[\da-f]{6}|-)(?: ([^[\]\r\n]{1,80}))?\]$/i;
 var TORONTO = new Intl.DateTimeFormat("en-CA", {
 	timeZone: "America/Toronto",
 	year: "numeric",
@@ -127,11 +127,15 @@ function issueFromAccountData(name, address, metadata) {
 		statusColor: typeof statusColor === "string" && /^#[a-f0-9]{6}$/i.test(statusColor) ? statusColor : null
 	};
 }
-function projectAppearance(topic) {
-	const [, color, icon] = topic?.match(PROJECT_TOPIC_SUFFIX) ?? [];
+function projectAppearance(address, metadata) {
+	if (!address || metadata?.version !== 1 || metadata.teamId !== address.team || metadata.channelId !== address.channelId) return {
+		color: null,
+		icon: null
+	};
+	const { color, icon } = metadata;
 	return {
-		color: color === "-" ? null : color ?? null,
-		icon: icon ?? null
+		color: typeof color === "string" && /^#[a-f0-9]{6}$/i.test(color) ? color : null,
+		icon: typeof icon === "string" ? icon.trim() || null : null
 	};
 }
 function workspace(rooms, day, visibility = null) {
@@ -145,7 +149,7 @@ function workspace(rooms, day, visibility = null) {
 		const name = channelName(room.name);
 		const address = slackAddress(bridges);
 		const issue = issueFromAccountData(name, address, room.issueMetadata);
-		const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
+		const project = PROJECT.test(name) ? projectAppearance(address, room.projectMetadata) : null;
 		const channel = {
 			id: room.roomId,
 			name,
@@ -669,11 +673,7 @@ ${SUMMARY_CONTENT} [${TITLE}] {
 `;
 // src/index.ts
 var BRIDGE_EVENTS = ["m.bridge", "uk.half-shot.bridge"];
-var ROOM_METADATA = /* @__PURE__ */ new Set([
-	...BRIDGE_EVENTS,
-	"m.room.name",
-	"m.room.topic"
-]);
+var ROOM_METADATA = /* @__PURE__ */ new Set([...BRIDGE_EVENTS, "m.room.name"]);
 var REGION = (name) => `[data-zam-region="${name}"]`;
 var NATIVE_TIMELINE = `${REGION("timeline")}:not(.leon-home)`;
 var NATIVE_MORE = ":scope > button[aria-haspopup=\"menu\"][aria-expanded]:not(.leon-menu)";
@@ -695,8 +695,8 @@ function readRooms(matrix, clientModule) {
 		return [{
 			roomId: room.roomId,
 			name: room.name,
-			topic: clientModule.getRoomTopic(room),
 			issueMetadata: matrix.getAccountData(LINEAR_ISSUE_ACCOUNT_DATA, room.roomId),
+			projectMetadata: matrix.getAccountData(PROJECT_APPEARANCE_ACCOUNT_DATA, room.roomId),
 			bridges,
 			archived: Object.hasOwn(room.tags ?? {}, "m.lowpriority")
 		}];
@@ -1318,7 +1318,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 	}
 	function onAccountData(event) {
 		const type = event.getType();
-		if (type === "ai.leonsilicon.linear.issue" || type === "ai.leonsilicon.linear.project_visibility") schedule(true);
+		if (type === "ai.leonsilicon.linear.issue" || type === "ai.leonsilicon.linear.project" || type === "ai.leonsilicon.linear.project_visibility") schedule(true);
 		else if (type === "com.beeper.bridge_state") schedule();
 	}
 	function onState(event) {

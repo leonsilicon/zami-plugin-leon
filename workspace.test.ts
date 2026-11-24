@@ -49,16 +49,10 @@ void test("Home matches the Slack avatar to the room's bridge login", () => {
   assert.equal(slackAccountAvatar(null, bridge("TWORK", "TWORK-UTWO")), null);
 });
 
-function room(
-  name: string,
-  topic: string | null = null,
-  protocol = "slack",
-  extra: Record<string, unknown> = {},
-): BridgedRoom {
+function room(name: string, protocol = "slack", extra: Record<string, unknown> = {}): BridgedRoom {
   return {
     roomId: "!" + name,
     name,
-    topic,
     bridges: [{ content: { protocol: { id: protocol }, ...extra } }],
   };
 }
@@ -67,7 +61,7 @@ function issueRoom(name: string, metadata: Record<string, unknown> = {}): Bridge
   const identifier = /leon-\d+/i.exec(name)![0].toUpperCase();
   const channelId = "C" + identifier.replace("-", "");
   return {
-    ...room(name, null, "slackgo", { channel: { id: `TWORK-${channelId}` } }),
+    ...room(name, "slackgo", { channel: { id: `TWORK-${channelId}` } }),
     issueMetadata: {
       version: 1,
       identifier,
@@ -163,8 +157,8 @@ void test("Home uses Matrix status for matching Slack issue rooms", () => {
       issueRoom("leon-3-start", { statusName: "Awaiting Start" }),
       issueRoom("leon-4-clarify", { statusName: "Awaiting Leon Again" }),
       room("leon-5-no-metadata"),
-      room("leon-6-sms", null, "sms"),
-      room("leon-7-dm", null, "slack", { "com.beeper.room_type": "dm" }),
+      room("leon-6-sms", "sms"),
+      room("leon-7-dm", "slack", { "com.beeper.room_type": "dm" }),
       issueRoom("leon-8-completed", { statusType: "completed" }),
       issueRoom("leon-9-canceled", { statusType: "canceled" }),
       issueRoom("leon-10-wrong-link", { url: "https://linear.app/team/issue/LEON-90" }),
@@ -190,12 +184,11 @@ void test("Home uses Matrix status for matching Slack issue rooms", () => {
 });
 
 void test("Issue rooms ignore Slack topics and update when Matrix account data arrives", () => {
-  const task = issueRoom("leon-12-review", {
-    title: "Full title ".repeat(30).trim(),
-    priority: 1,
-  });
-  task.topic =
-    "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-12 · Stale topic";
+  const task = {
+    ...issueRoom("leon-12-review", { title: "Full title ".repeat(30).trim(), priority: 1 }),
+    topic:
+      "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-12 · Stale topic",
+  };
   const details = task.issueMetadata!;
 
   for (const issueMetadata of [
@@ -293,9 +286,9 @@ void test("today's project handles channel naming collisions and early dailyline
   const names = [
     room("project-2026-11-20"),
     room("project-2026-11-21-10"),
-    room("#project-2026-11-21-2", null, "slackgo"),
+    room("#project-2026-11-21-2", "slackgo"),
     room("project-20261121"),
-    room("project-2026-11-21", null, "slack"),
+    room("project-2026-11-21", "slack"),
   ];
   assert.equal(workspace(names, day).today?.name, "project-2026-11-21");
   assert.equal(workspace(names.slice(0, -1), day).today?.name, "project-20261121");
@@ -305,7 +298,7 @@ void test("today's project handles channel naming collisions and early dailyline
 
 void test("the rail excludes Beeper archives and closed Slack projects for the matching workspace", () => {
   const slack = (name: string, id: string, team = "TWORK") =>
-    room(name, null, "slackgo", { channel: { id: `${team}-${id}` } });
+    room(name, "slackgo", { channel: { id: `${team}-${id}` } });
   const snapshot = readProjectVisibility({
     version: 1,
     teamId: "TWORK",
@@ -378,25 +371,26 @@ void test("a project day ends at the next midnight in Toronto, daylight saving c
   assert.equal(end("2026-03-08T05:00:00Z"), "2026-03-09T04:00:00.000Z");
 });
 
-void test("projects use the icon and color appended to their bridged topics", () => {
-  const { projects, today } = workspace(
-    [
-      room("project-2026-11-21", "[linear-project:v1 #e8b510]"),
-      room("project-ironman", "Training plan · [linear-project:v1 #5e6ad2 :runner:]"),
-      room("project-university", "Original topic"),
-      room("project-taxes", "[linear-project:v1 bad-color IconBook]"),
-    ],
-    day,
-  );
-  assert.deepEqual(today?.project, { color: "#e8b510", icon: null });
-  assert.deepEqual(
-    projects.slice(1).map(({ project }) => project),
-    [
-      { color: "#5e6ad2", icon: ":runner:" },
-      { color: null, icon: null },
-      { color: null, icon: null },
-    ],
-  );
+void test("projects use matching Matrix room account data and ignore stale Slack topics", () => {
+  const project = {
+    ...room("project-2026-11-21", "slackgo", { channel: { id: "TWORK-CPROJECT" } }),
+    topic: "[linear-project:v1 #eb5757 IconBook]",
+  };
+  const projectMetadata = {
+    version: 1,
+    teamId: "TWORK",
+    channelId: "CPROJECT",
+    color: "#5e6ad2",
+    icon: ":runner:",
+  };
+  const appearance = (data?: Record<string, unknown>) =>
+    workspace([{ ...project, projectMetadata: data }], day).today?.project;
+  const defaults = { color: null, icon: null };
+  assert.deepEqual(appearance(), defaults);
+  assert.deepEqual(appearance({ ...projectMetadata, teamId: "TOTHER" }), defaults);
+  assert.deepEqual(appearance({ ...projectMetadata, channelId: "COTHER" }), defaults);
+  assert.deepEqual(appearance(projectMetadata), { color: "#5e6ad2", icon: ":runner:" });
+  assert.deepEqual(appearance({ ...projectMetadata, color: null, icon: null }), defaults);
 });
 
 void test("project labels show full names and format dates without shifting the day", () => {

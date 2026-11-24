@@ -14,6 +14,7 @@ import {
   AWAITING,
   issueChannel,
   LINEAR_ISSUE_ACCOUNT_DATA,
+  PROJECT_APPEARANCE_ACCOUNT_DATA,
   PROJECT_VISIBILITY_ACCOUNT_DATA,
   projectDay,
   projectDayEnd,
@@ -43,7 +44,7 @@ interface WorkspaceModules {
 }
 
 const BRIDGE_EVENTS = ["m.bridge", "uk.half-shot.bridge"];
-const ROOM_METADATA = new Set([...BRIDGE_EVENTS, "m.room.name", "m.room.topic"]);
+const ROOM_METADATA = new Set([...BRIDGE_EVENTS, "m.room.name"]);
 const REGION = (name: string) => `[data-zam-region="${name}"]`;
 const NATIVE_TIMELINE = `${REGION("timeline")}:not(.leon-home)`;
 const NATIVE_MORE = ':scope > button[aria-haspopup="menu"][aria-expanded]:not(.leon-menu)';
@@ -68,8 +69,8 @@ function readRooms(matrix: ZamApi["matrix"], clientModule: ClientModule): Bridge
       {
         roomId: room.roomId,
         name: room.name,
-        topic: clientModule.getRoomTopic(room),
         issueMetadata: matrix.getAccountData(LINEAR_ISSUE_ACCOUNT_DATA, room.roomId),
+        projectMetadata: matrix.getAccountData(PROJECT_APPEARANCE_ACCOUNT_DATA, room.roomId),
         bridges,
         archived: Object.hasOwn(room.tags ?? {}, "m.lowpriority"),
       },
@@ -937,7 +938,11 @@ function install(
 
   function onAccountData(event: MatrixEvent) {
     const type = event.getType();
-    if (type === LINEAR_ISSUE_ACCOUNT_DATA || type === PROJECT_VISIBILITY_ACCOUNT_DATA)
+    if (
+      type === LINEAR_ISSUE_ACCOUNT_DATA ||
+      type === PROJECT_APPEARANCE_ACCOUNT_DATA ||
+      type === PROJECT_VISIBILITY_ACCOUNT_DATA
+    )
       schedule(true);
     else if (type === BRIDGE_ACCOUNT_DATA) schedule();
   }

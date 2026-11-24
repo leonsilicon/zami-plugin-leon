@@ -78,7 +78,6 @@ export interface HostModules {
   "$lib/matrix/client": {
     getRoom(roomId: string): Room | null;
     getRooms(): Room[];
-    getRoomTopic(room: Room): string | null;
     getRoomUnreadInfo(room: Room): { unread: boolean; highlight: number };
     roomHasThreadUnread(room: Room): boolean;
     getOwnAvatarUrl(): string | null;
