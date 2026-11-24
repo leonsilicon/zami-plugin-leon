@@ -174,6 +174,38 @@ void test("Home uses the synced Linear status and excludes stale or unrelated Sl
   assert.equal(data.channels.has("!leon-9-canceled"), true);
 });
 
+void test("Matrix issue metadata overrides a stale topic and deleted issues stay hidden", () => {
+  const legacyTopic =
+    "Awaiting Leon · linear:v1 started #f2c94c p2 · https://linear.app/team/issue/LEON-12 · Short";
+  const task = room("leon-12-review", legacyTopic, "slackgo", {
+    channel: { id: "TWORK-CISSUE" },
+  });
+  const details = {
+    version: 1,
+    channelId: "CISSUE",
+    identifier: "LEON-12",
+    title: "Full title ".repeat(30).trim(),
+    statusName: "Awaiting Hermes",
+    statusType: "started",
+    statusColor: "#bec2c8",
+    priority: 1,
+    url: "https://linear.app/team/issue/LEON-12",
+  };
+  let data = workspace([{ ...task, issueMetadata: details }], day);
+  assert.equal(data.channels.get(task.roomId)?.issue?.title, details.title);
+  assert.deepEqual(data.awaiting, []);
+  data = workspace(
+    [{ ...task, topic: null, issueMetadata: { ...details, statusName: "Awaiting Leon" } }],
+    day,
+  );
+  assert.equal(data.awaiting[0]?.issue?.priority, 1);
+  data = workspace([{ ...task, issueMetadata: { ...details, deleted: true } }], day);
+  assert.equal(data.channels.get(task.roomId)?.issue, undefined);
+  assert.deepEqual(data.awaiting, []);
+  data = workspace([{ ...task, issueMetadata: { ...details, channelId: "CWRONG" } }], day);
+  assert.equal(data.awaiting[0]?.issue?.title, "Short");
+});
+
 void test("issue rows read the synced title, priority, and status appearance", () => {
   const data = workspace(
     [

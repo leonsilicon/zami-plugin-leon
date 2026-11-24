@@ -24,12 +24,14 @@ export interface BridgedRoom {
   roomId: string;
   name: string;
   topic: string | null;
+  issueMetadata?: Record<string, unknown> | null;
   bridges: BridgeState[];
   isSpace?: boolean;
   archived?: boolean;
 }
 
 export const AWAITING = "Awaiting Leon";
+export const LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
 export const PROJECT_VISIBILITY_CHANNEL = "zami-project-visibility";
 const PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
 const TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
@@ -164,6 +166,44 @@ export function readProjectVisibility(
   return null;
 }
 
+function issueFromAccountData(
+  name: string,
+  address: ReturnType<typeof slackAddress>,
+  metadata: BridgedRoom["issueMetadata"],
+): IssueDetails | null | undefined {
+  const identifier = issueChannel(name)?.identifier;
+  if (
+    !address ||
+    !identifier ||
+    metadata?.version !== 1 ||
+    metadata.channelId !== address.channelId ||
+    typeof metadata.identifier !== "string" ||
+    metadata.identifier.toLowerCase() !== identifier
+  )
+    return undefined;
+  if (metadata.deleted === true) return null;
+  const { title, priority, statusName, statusType, statusColor, url } = metadata;
+  if (
+    typeof title !== "string" ||
+    !title.trim() ||
+    typeof statusName !== "string" ||
+    !statusName.trim() ||
+    typeof statusType !== "string" ||
+    !/^[a-z_]+$/i.test(statusType) ||
+    typeof url !== "string" ||
+    linearIssueIdentifier(url) !== identifier
+  )
+    return undefined;
+  return {
+    title,
+    priority: typeof priority === "number" && /^[0-4]$/.test(String(priority)) ? priority : null,
+    statusName,
+    statusType: statusType.toLowerCase(),
+    statusColor:
+      typeof statusColor === "string" && /^#[a-f0-9]{6}$/i.test(statusColor) ? statusColor : null,
+  };
+}
+
 function linearIssue(name: string, topic: string | null): IssueDetails | null {
   const identifier = issueChannel(name)?.identifier;
   if (!identifier || !topic) return null;
@@ -205,12 +245,13 @@ export function workspace(
     if (!bridges.length) continue;
     const name = channelName(room.name);
     if (name === PROJECT_VISIBILITY_CHANNEL) continue;
-    const issue = linearIssue(name, room.topic);
+    const address = slackAddress(bridges);
+    const fromAccountData = issueFromAccountData(name, address, room.issueMetadata);
+    const issue = fromAccountData === undefined ? linearIssue(name, room.topic) : fromAccountData;
     const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
     const channel = { id: room.roomId, name, ...(issue && { issue }), ...(project && { project }) };
     channels.set(channel.id, channel);
     if (TASK.test(name)) {
-      const address = slackAddress(bridges);
       if (address) {
         const matches = slackIssues.get(address.channelId) ?? [];
         matches.push({ team: address.team, channel });
@@ -218,7 +259,6 @@ export function workspace(
       }
     }
     if (project && !room.archived) {
-      const address = slackAddress(bridges);
       const snapshot = address ? visibility.get(address.team) : undefined;
       // Dailylinear closes past days. The snapshot can also show a manually reopened day.
       const closed =

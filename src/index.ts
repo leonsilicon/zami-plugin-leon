@@ -14,6 +14,7 @@ import {
   AWAITING,
   channelName,
   issueChannel,
+  LINEAR_ISSUE_ACCOUNT_DATA,
   PROJECT_VISIBILITY_CHANNEL,
   projectDay,
   projectDayEnd,
@@ -69,6 +70,7 @@ function readRooms(matrix: ZamApi["matrix"], clientModule: ClientModule): Bridge
         roomId: room.roomId,
         name: room.name,
         topic: clientModule.getRoomTopic(room),
+        issueMetadata: matrix.getAccountData(LINEAR_ISSUE_ACCOUNT_DATA, room.roomId),
         bridges,
         archived: Object.hasOwn(room.tags ?? {}, "m.lowpriority"),
       },
@@ -940,7 +942,9 @@ function install(
   }
 
   function onAccountData(event: MatrixEvent) {
-    if (event.getType() === BRIDGE_ACCOUNT_DATA) schedule();
+    const type = event.getType();
+    if (type === LINEAR_ISSUE_ACCOUNT_DATA) schedule(true);
+    else if (type === BRIDGE_ACCOUNT_DATA) schedule();
   }
 
   function onState(event: MatrixEvent) {
@@ -974,12 +978,14 @@ function install(
       client?.off("Room.timeline", onProjectVisibility);
       client?.off("Event.decrypted", onProjectVisibility);
       client?.off("accountData", onAccountData);
+      client?.off("Room.accountData", onAccountData);
       client = currentClient;
       client?.on("RoomState.events", onState);
       client?.on("Room.tags", onTags);
       client?.on("Room.timeline", onProjectVisibility);
       client?.on("Event.decrypted", onProjectVisibility);
       client?.on("accountData", onAccountData);
+      client?.on("Room.accountData", onAccountData);
       refresh = true;
     }
     if (auth.userId !== activeAccount) {
@@ -1089,6 +1095,7 @@ function install(
     client?.off("Room.timeline", onProjectVisibility);
     client?.off("Event.decrypted", onProjectVisibility);
     client?.off("accountData", onAccountData);
+    client?.off("Room.accountData", onAccountData);
     roomWatch.dispose();
     viewWatch.dispose();
     accountAvatar.dispose();

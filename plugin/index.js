@@ -1,6 +1,7 @@
 // Generated from src/index.ts by vp build.
 // src/workspace.ts
 var AWAITING = "Awaiting Leon";
+var LINEAR_ISSUE_ACCOUNT_DATA = "ai.leonsilicon.linear.issue";
 var PROJECT_VISIBILITY_PREFIX = "zami-projects:v1";
 var TASK = /^(leon-\d+)(?:-([a-z0-9_-]+))?$/;
 var TOPIC_SEPARATOR = " · ";
@@ -119,6 +120,20 @@ function readProjectVisibility(room, readMessages) {
 	}
 	return null;
 }
+function issueFromAccountData(name, address, metadata) {
+	const identifier = issueChannel(name)?.identifier;
+	if (!address || !identifier || metadata?.version !== 1 || metadata.channelId !== address.channelId || typeof metadata.identifier !== "string" || metadata.identifier.toLowerCase() !== identifier) return void 0;
+	if (metadata.deleted === true) return null;
+	const { title, priority, statusName, statusType, statusColor, url } = metadata;
+	if (typeof title !== "string" || !title.trim() || typeof statusName !== "string" || !statusName.trim() || typeof statusType !== "string" || !/^[a-z_]+$/i.test(statusType) || typeof url !== "string" || linearIssueIdentifier(url) !== identifier) return void 0;
+	return {
+		title,
+		priority: typeof priority === "number" && /^[0-4]$/.test(String(priority)) ? priority : null,
+		statusName,
+		statusType: statusType.toLowerCase(),
+		statusColor: typeof statusColor === "string" && /^#[a-f0-9]{6}$/i.test(statusColor) ? statusColor : null
+	};
+}
 function linearIssue(name, topic) {
 	const identifier = issueChannel(name)?.identifier;
 	if (!identifier || !topic) return null;
@@ -154,7 +169,9 @@ function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 		if (!bridges.length) continue;
 		const name = channelName(room.name);
 		if (name === "zami-project-visibility") continue;
-		const issue = linearIssue(name, room.topic);
+		const address = slackAddress(bridges);
+		const fromAccountData = issueFromAccountData(name, address, room.issueMetadata);
+		const issue = fromAccountData === void 0 ? linearIssue(name, room.topic) : fromAccountData;
 		const project = PROJECT.test(name) ? projectAppearance(room.topic) : null;
 		const channel = {
 			id: room.roomId,
@@ -164,7 +181,6 @@ function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 		};
 		channels.set(channel.id, channel);
 		if (TASK.test(name)) {
-			const address = slackAddress(bridges);
 			if (address) {
 				const matches = slackIssues.get(address.channelId) ?? [];
 				matches.push({
@@ -175,7 +191,6 @@ function workspace(rooms, day, visibility = /* @__PURE__ */ new Map()) {
 			}
 		}
 		if (project && !room.archived) {
-			const address = slackAddress(bridges);
 			const snapshot = address ? visibility.get(address.team) : void 0;
 			if (!(snapshot && address ? snapshot.closed.has(address.channelId) : (datedProject(name)?.iso ?? day) < day)) projects.push(channel);
 		}
@@ -709,6 +724,7 @@ function readRooms(matrix, clientModule) {
 			roomId: room.roomId,
 			name: room.name,
 			topic: clientModule.getRoomTopic(room),
+			issueMetadata: matrix.getAccountData(LINEAR_ISSUE_ACCOUNT_DATA, room.roomId),
 			bridges,
 			archived: Object.hasOwn(room.tags ?? {}, "m.lowpriority")
 		}];
@@ -1331,7 +1347,9 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		state.roomsTick++;
 	}
 	function onAccountData(event) {
-		if (event.getType() === "com.beeper.bridge_state") schedule();
+		const type = event.getType();
+		if (type === "ai.leonsilicon.linear.issue") schedule(true);
+		else if (type === "com.beeper.bridge_state") schedule();
 	}
 	function onState(event) {
 		const type = event.getType();
@@ -1359,12 +1377,14 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 			client?.off("Room.timeline", onProjectVisibility);
 			client?.off("Event.decrypted", onProjectVisibility);
 			client?.off("accountData", onAccountData);
+			client?.off("Room.accountData", onAccountData);
 			client = currentClient;
 			client?.on("RoomState.events", onState);
 			client?.on("Room.tags", onTags);
 			client?.on("Room.timeline", onProjectVisibility);
 			client?.on("Event.decrypted", onProjectVisibility);
 			client?.on("accountData", onAccountData);
+			client?.on("Room.accountData", onAccountData);
 			refresh = true;
 		}
 		if (auth.userId !== activeAccount) {
@@ -1449,6 +1469,7 @@ function install(zam, zami, { rooms, ui, closeSidebar, auth, clientModule, avata
 		client?.off("Room.timeline", onProjectVisibility);
 		client?.off("Event.decrypted", onProjectVisibility);
 		client?.off("accountData", onAccountData);
+		client?.off("Room.accountData", onAccountData);
 		roomWatch.dispose();
 		viewWatch.dispose();
 		accountAvatar.dispose();

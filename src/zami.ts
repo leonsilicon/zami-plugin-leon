@@ -21,7 +21,12 @@ export interface MatrixEvent {
   getRoomId(): string | undefined;
 }
 
-type ObservedMatrixEvent = "RoomState.events" | "accountData" | "Room.timeline" | "Event.decrypted";
+type ObservedMatrixEvent =
+  | "RoomState.events"
+  | "Room.accountData"
+  | "accountData"
+  | "Room.timeline"
+  | "Event.decrypted";
 
 export interface MatrixClient {
   getUserId(): string | null;
@@ -159,7 +164,7 @@ export interface ZamApi {
   unsafe: { getClient(): MatrixClient | null | undefined };
   matrix: {
     listState(roomId: string, type: string): BridgeState[];
-    getAccountData(type: string): Record<string, unknown> | null;
+    getAccountData(type: string, roomId?: string): Record<string, unknown> | null;
     getRecentMessages(roomId: string): { body: string; timestamp: number }[];
   };
 }

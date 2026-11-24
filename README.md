@@ -21,7 +21,7 @@ A Zami plugin that optimizes the UI for how Leon uses Slack.
 
 ## Data
 
-The plugin reads joined Slack rooms through Beeper. [Linear Slack Sync](https://github.com/leonsilicon/leonsilicon.ai/tree/main/packages/ai/leonsilicon/services/linear-slack-sync) writes the priority, status, its type and color, the issue link, and the title to the Slack channel topic, which Beeper exposes as the Matrix room topic. Home lists issues whose versioned topic reports **Awaiting Leon** and links to the issue named by the channel. The daily sync upgrades older topics for open issues.
+The plugin reads joined Slack rooms through Beeper. Linear Sync publishes issue titles, status, color, priority, and dates in Matrix room account data on Leon's Beeper account. Home lists issues marked **Awaiting Leon**. Cached Slack topics provide issue details for rooms that have yet to receive account data.
 
 Manual section moves and archived rooms with stale topic or membership state in Beeper can differ from the sidebar.
 
